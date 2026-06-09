@@ -31,6 +31,7 @@ PLANG = os.environ.get("DEAL_PROSPECT_LANG", "en")
 STT_LOCALE = {"ru": "ru-RU", "en": "en-US", "es": "es-ES", "fr": "fr-FR", "de": "de-DE"}.get(PLANG, "en-US")
 FRAME_BYTES = 960  # 10ms @ 48k mono s16le
 SILENCE = b"\x00" * FRAME_BYTES
+SILENCE16K = b"\x00" * 320  # 10ms @ 16k — keepalive for Transcribe while speaking
 
 
 def _ds_48_16(pcm: bytes) -> bytes:
@@ -42,9 +43,10 @@ async def main():
     client = TelegramClient(StringSession(os.environ["TG_SESSION_STRING"]),
                             int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"])
     from pytgcalls import PyTgCalls, filters as fl
-    from pytgcalls.types import (Device, ExternalMedia, GroupCallConfig, MediaStream,
+    from pytgcalls.types import (Device, ExternalMedia, Frame, GroupCallConfig, MediaStream,
                                  RecordStream, StreamFrames, UpdatedGroupCallParticipant)
     from pytgcalls.types.raw import AudioParameters
+    frame_info = Frame.Info()
 
     await client.start()
     me = await client.get_me()
@@ -77,7 +79,10 @@ async def main():
             print(f"stream_frame combo dir={combo[0]} dev={combo[1]} ssrcs="
                   f"{[f.ssrc for f in u.frames]} bytes="
                   f"{u.frames[0].frame.__len__() if u.frames else 0}", flush=True)
-        if st["speaking"] or stt is None:
+        if stt is None:
+            return
+        if st["speaking"]:
+            stt.feed(SILENCE16K)  # keepalive: keep Transcribe warm, ignore our echo
             return
         for fr in u.frames:
             if st["self_ssrc"] is not None and fr.ssrc == st["self_ssrc"]:
@@ -97,7 +102,7 @@ async def main():
             except asyncio.QueueEmpty:
                 chunk = SILENCE
             try:
-                await call.send_frame(CHAT, Device.MICROPHONE, chunk)
+                await call.send_frame(CHAT, Device.MICROPHONE, chunk, frame_info)
             except Exception:
                 pass
             next_t += 0.01
@@ -108,8 +113,12 @@ async def main():
                 next_t = loop.time()  # fell behind — resync, don't spiral
 
     async def speak(text: str):
-        say = voice.translate(text, source="en", target=PLANG) if PLANG != "en" else text
-        pcm = voice.synthesize_pcm48k(say, PLANG)
+        # boto3 (Translate/Polly) is BLOCKING — run off the event loop so the
+        # 10ms send pump never stalls (that was the mid-utterance hiccup).
+        say = text
+        if PLANG != "en":
+            say = await asyncio.to_thread(voice.translate, text, source="en", target=PLANG)
+        pcm = await asyncio.to_thread(voice.synthesize_pcm48k, say, PLANG)
         st["speaking"] = True
         # Enqueue the WHOLE utterance synchronously (no await between frames) so
         # the sender never finds the queue momentarily empty mid-word and pads
@@ -131,8 +140,11 @@ async def main():
         if st["speaking"]:
             return
         print(f"heard: {text!r}", flush=True)
-        en = voice.translate(text, source=PLANG, target="en") if PLANG != "en" else text
-        turn = session.handle(en)
+        en = text
+        if PLANG != "en":
+            en = await asyncio.to_thread(voice.translate, text, source=PLANG, target="en")
+        # session.handle does Bedrock + DynamoDB (both blocking) -> off-loop.
+        turn = await asyncio.to_thread(session.handle, en)
         print(f"answering [{turn.action}]: {turn.reply[:90]!r}", flush=True)
         await speak(turn.reply)
 
@@ -142,10 +154,11 @@ async def main():
         answer out loud in the call (uses the proven send_frame output)."""
         while True:
             try:
-                item = session.store.get(session.call_id) or {}
+                item = await asyncio.to_thread(session.store.get, session.call_id) or {}
                 q = item.get("pending_q")
                 if q and not st["speaking"]:
-                    session.store.set(session.call_id, command="none", pending_q="")
+                    await asyncio.to_thread(session.store.set, session.call_id,
+                                            command="none", pending_q="")
                     await on_utt(q)
             except Exception as e:
                 print(f"dash_poller err: {e}", flush=True)
@@ -166,10 +179,22 @@ async def main():
                     config=GroupCallConfig(auto_start=True))
     await call.record(CHAT, RecordStream(audio=True, audio_parameters=AudioParameters(48000, 1)))
     asyncio.create_task(_sender())
-    if os.environ.get("STT_ENABLED", "0") == "1":  # inbound voice capture (experimental)
+    if os.environ.get("STT_ENABLED", "0") == "1":  # inbound voice capture
         stt = TranscribeStreamer(locale=STT_LOCALE, on_final=on_utt)
-        asyncio.create_task(stt.run())
-    session.store.create_call(session.call_id, status="live")
+
+        async def _stt_runner():
+            # Transcribe streams die after 15s of no audio; auto-reconnect so
+            # the agent keeps hearing across the whole call (the "answers once
+            # then silent" bug). The keepalive in _frames also feeds silence.
+            while True:
+                try:
+                    await stt.run()
+                except Exception as e:
+                    print(f"stt reconnect: {e}", flush=True)
+                await asyncio.sleep(0.3)
+
+        asyncio.create_task(_stt_runner())
+    await asyncio.to_thread(session.store.create_call, session.call_id, status="live")
     asyncio.create_task(_dash_poller())
     print(f"DASH_CALL_ID={session.call_id}", flush=True)
     await speak("Hi! I'm the DialogBrain agent. Ask me anything about what we do.")
