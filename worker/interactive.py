@@ -1,0 +1,152 @@
+"""Interactive in-call agent (audio duplex) — hears you and answers, all AWS.
+
+  play(ExternalMedia.AUDIO)  -> outgoing: we push Polly TTS via send_frame  [proven]
+  record(RecordStream audio) -> incoming: ntgcalls emits stream_frame       [capture]
+    incoming 48k -> 16k -> Amazon Transcribe -> DealRoomSession (Bedrock)
+    -> Amazon Polly 48k PCM -> 10ms send_frame cadence -> spoken in the call
+
+Diagnostics: every stream_frame logs direction/device/#frames/bytes so we can
+see exactly what the call delivers. Speaking-gate stops the agent transcribing
+its own voice.
+
+Env: TG_API_ID/HASH/SESSION_STRING, TG_GROUP_ID, DDB_TABLE, EXA_API_KEY,
+     STRIPE_SECRET_KEY, DEAL_PROSPECT_LANG, AWS creds.
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import time
+
+import numpy as np
+from telethon import TelegramClient
+from telethon.sessions import StringSession
+
+import voice
+from session import DealRoomSession
+from stt import TranscribeStreamer
+
+CHAT = int(os.environ["TG_GROUP_ID"])
+PLANG = os.environ.get("DEAL_PROSPECT_LANG", "en")
+STT_LOCALE = {"ru": "ru-RU", "en": "en-US", "es": "es-ES", "fr": "fr-FR", "de": "de-DE"}.get(PLANG, "en-US")
+FRAME_BYTES = 960  # 10ms @ 48k mono s16le
+SILENCE = b"\x00" * FRAME_BYTES
+
+
+def _ds_48_16(pcm: bytes) -> bytes:
+    s = np.frombuffer(pcm, dtype=np.int16)
+    return s[::3].tobytes() if s.size else b""
+
+
+async def main():
+    client = TelegramClient(StringSession(os.environ["TG_SESSION_STRING"]),
+                            int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"])
+    from pytgcalls import PyTgCalls, filters as fl
+    from pytgcalls.types import (Device, ExternalMedia, GroupCallConfig, MediaStream,
+                                 RecordStream, StreamFrames, UpdatedGroupCallParticipant)
+    from pytgcalls.types.raw import AudioParameters
+
+    await client.start()
+    me = await client.get_me()
+    print(f"logged in as @{me.username} (id={me.id})", flush=True)
+    await client.get_dialogs()
+    await client.get_entity(CHAT)
+
+    call = PyTgCalls(client)
+    session = DealRoomSession(f"call-incall-{int(time.time())}", require_approval=True)
+    st = {"self_ssrc": None, "speaking": False, "fed": 0}
+    out_q: asyncio.Queue[bytes] = asyncio.Queue()
+    stt: TranscribeStreamer | None = None
+
+    @call.on_update(fl.call_participant())
+    async def _part(_, u: UpdatedGroupCallParticipant):
+        if u.participant.user_id == me.id and getattr(u.action, "name", "") == "JOINED":
+            st["self_ssrc"] = u.participant.source
+            print(f"self_ssrc={st['self_ssrc']}", flush=True)
+
+    @call.on_update(fl.stream_frame())
+    async def _frames(_, u: StreamFrames):
+        d = getattr(u.direction, "name", str(u.direction))
+        dev = getattr(u.device, "name", str(u.device))
+        nbytes = sum(len(f.frame) for f in u.frames)
+        if st["fed"] % 50 == 0:
+            print(f"frame dir={d} dev={dev} n={len(u.frames)} bytes={nbytes}", flush=True)
+        if d != "INCOMING":
+            return
+        if st["speaking"] or stt is None:
+            return
+        for fr in u.frames:
+            if st["self_ssrc"] is not None and fr.ssrc == st["self_ssrc"]:
+                continue
+            stt.feed(_ds_48_16(fr.frame))
+            st["fed"] += 1
+
+    async def _sender():
+        while True:
+            try:
+                chunk = out_q.get_nowait()
+            except asyncio.QueueEmpty:
+                chunk = SILENCE
+            try:
+                await call.send_frame(CHAT, Device.MICROPHONE, chunk)
+            except Exception:
+                pass
+            await asyncio.sleep(0.01)
+
+    async def speak(text: str):
+        say = voice.translate(text, source="en", target=PLANG) if PLANG != "en" else text
+        pcm = voice.synthesize_pcm48k(say, PLANG)
+        st["speaking"] = True
+        for i in range(0, len(pcm), FRAME_BYTES):
+            fr = pcm[i:i + FRAME_BYTES]
+            if len(fr) < FRAME_BYTES:
+                fr = fr + b"\x00" * (FRAME_BYTES - len(fr))
+            await out_q.put(fr)
+        # hold the gate for the audio duration + small tail, then reopen ears
+        await asyncio.sleep(len(pcm) / (48000 * 2) + 0.8)
+        st["speaking"] = False
+
+    async def on_utt(text: str):
+        if st["speaking"]:
+            return
+        print(f"heard: {text!r}", flush=True)
+        en = voice.translate(text, source=PLANG, target="en") if PLANG != "en" else text
+        turn = session.handle(en)
+        print(f"answering [{turn.action}]: {turn.reply[:90]!r}", flush=True)
+        await speak(turn.reply)
+
+    async def _dash_poller():
+        """Reliable interactive path: questions typed in the dashboard 'Talk to
+        the agent' box arrive as pending_q on this call -> the agent speaks the
+        answer out loud in the call (uses the proven send_frame output)."""
+        while True:
+            try:
+                item = session.store.get(session.call_id) or {}
+                q = item.get("pending_q")
+                if q and not st["speaking"]:
+                    session.store.set(session.call_id, command="none", pending_q="")
+                    await on_utt(q)
+            except Exception as e:
+                print(f"dash_poller err: {e}", flush=True)
+            await asyncio.sleep(1.5)
+
+    await call.start()
+    await call.play(CHAT, MediaStream(media_path=ExternalMedia.AUDIO,
+                                      audio_parameters=AudioParameters(48000, 1)),
+                    config=GroupCallConfig(auto_start=True))
+    await call.record(CHAT, RecordStream(audio=True, audio_parameters=AudioParameters(48000, 1)))
+    asyncio.create_task(_sender())
+    if os.environ.get("STT_ENABLED", "0") == "1":  # inbound voice capture (experimental)
+        stt = TranscribeStreamer(locale=STT_LOCALE, on_final=on_utt)
+        asyncio.create_task(stt.run())
+    session.store.create_call(session.call_id, status="live")
+    asyncio.create_task(_dash_poller())
+    print(f"DASH_CALL_ID={session.call_id}", flush=True)
+    await speak("Hi! I'm the DialogBrain agent. Ask me anything about what we do.")
+    print("INTERACTIVE — listening (ask out loud)", flush=True)
+    while True:
+        await asyncio.sleep(3600)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
