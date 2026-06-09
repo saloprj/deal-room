@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY worker/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# Chromium for the deck->video renderer (Playwright manages the binary + deps).
+RUN python -m playwright install --with-deps chromium
 
 COPY worker/ .
 

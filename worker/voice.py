@@ -37,6 +37,16 @@ def synthesize_pcm48k(text: str, lang: str = "en") -> bytes:
     return _upsample_16k_to_48k(pcm16k)
 
 
+def synthesize_mp3(text: str, lang: str = "en") -> bytes:
+    """Return Polly neural MP3 for `text` in `lang` (for the video renderer / ffmpeg)."""
+    voice = VOICE.get(lang, "Joanna")
+    try:
+        r = _polly.synthesize_speech(Text=text, OutputFormat="mp3", VoiceId=voice, Engine="neural")
+    except Exception:
+        r = _polly.synthesize_speech(Text=text, OutputFormat="mp3", VoiceId=voice)
+    return r["AudioStream"].read()
+
+
 def _upsample_16k_to_48k(pcm16k: bytes) -> bytes:
     """16 kHz -> 48 kHz mono s16le via 3x linear interpolation."""
     s = np.frombuffer(pcm16k, dtype=np.int16)

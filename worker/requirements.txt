@@ -5,3 +5,4 @@ py-tgcalls==2.2.11
 stripe>=9.0
 numpy>=1.26
 amazon-transcribe>=0.6.2
+playwright>=1.44

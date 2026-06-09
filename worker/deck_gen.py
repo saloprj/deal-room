@@ -26,8 +26,11 @@ _exa = Exa(os.environ["EXA_API_KEY"])
 _SYS = (
     "You are a top-tier startup pitch designer. From the research, produce a punchy, "
     "investor/sales-grade slide deck. Return ONLY JSON: "
-    '{"title": str, "subtitle": str, "slides": [{"heading": str, "bullets": [str, str, str]}]}. '
-    "5-7 slides. Bullets <= 9 words, concrete, no fluff. Ground claims in the research."
+    '{"title": str, "subtitle": str, "slides": [{"heading": str, "bullets": [str, str, str], '
+    '"narration": str}]}. '
+    "5-7 slides. Bullets <= 9 words, concrete, no fluff. "
+    "narration = what the presenter SAYS for that slide, 1-2 spoken sentences (<= 35 words), "
+    "natural and persuasive, expands on the bullets. Ground claims in the research."
 )
 
 
@@ -86,6 +89,11 @@ def build_deck(topic: str, *, model: str | None = None, out: str = "deck.html") 
     deck = author(topic, ctx, llm)
     with open(out, "w") as f:
         f.write(render_html(deck))
+    # Emit the structured deck alongside the HTML so the video renderer can
+    # narrate each slide (Polly) without re-calling the LLM.
+    deck_json = {**deck, "sources": sources}
+    with open(os.path.splitext(out)[0] + ".json", "w") as f:
+        json.dump(deck_json, f, indent=2)
     return {"title": deck["title"], "slides": len(deck["slides"]), "sources": sources, "out": out}
 
 
