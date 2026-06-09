@@ -152,6 +152,15 @@ async def main():
             await asyncio.sleep(1.5)
 
     await call.start()
+    # Silence the fork's verbose WebRTC logging (constructor sets LS_INFO). That
+    # log flood runs on the event loop and starves the 10ms send pump -> audio
+    # hiccups. 0=VERBOSE 1=INFO 2=WARNING 3=ERROR 4=NONE. Must be after start().
+    try:
+        from ntgcalls import set_log_level
+        set_log_level(4)
+        print("ntgcalls logging silenced (4=NONE)", flush=True)
+    except Exception as e:
+        print(f"set_log_level unavailable: {e}", flush=True)
     await call.play(CHAT, MediaStream(media_path=ExternalMedia.AUDIO,
                                       audio_parameters=AudioParameters(48000, 1)),
                     config=GroupCallConfig(auto_start=True))
