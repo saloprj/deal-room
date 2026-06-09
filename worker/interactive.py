@@ -32,6 +32,10 @@ STT_LOCALE = {"ru": "ru-RU", "en": "en-US", "es": "es-ES", "fr": "fr-FR", "de": 
 FRAME_BYTES = 960  # 10ms @ 48k mono s16le
 SILENCE = b"\x00" * FRAME_BYTES
 SILENCE16K = b"\x00" * 320  # 10ms @ 16k — keepalive for Transcribe while speaking
+# Deck screen-share (external video frames via send_frame(SCREEN)).
+PRESENT = os.environ.get("PRESENT_DECK", "1") == "1"
+DECK_MEDIA = os.environ.get("DECK_MEDIA", "/media/deck_mute.mp4")
+SCREEN_W, SCREEN_H, SCREEN_FPS = 1280, 720, 15
 
 
 def _ds_48_16(pcm: bytes) -> bytes:
@@ -164,6 +168,35 @@ async def main():
                 print(f"dash_poller err: {e}", flush=True)
             await asyncio.sleep(1.5)
 
+    async def _screen_pump():
+        """Stream the deck as an external SCREEN video (recorded deck shared as
+        screen-share): ffmpeg decodes to raw I420 at SCREEN_FPS, looping; each
+        frame goes out via send_frame(SCREEN)."""
+        fsz = SCREEN_W * SCREEN_H * 3 // 2
+        info = Frame.Info(width=SCREEN_W, height=SCREEN_H)
+        while True:
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-loglevel", "error", "-stream_loop", "-1", "-re", "-i", DECK_MEDIA,
+                "-vf", f"scale={SCREEN_W}:{SCREEN_H}", "-r", str(SCREEN_FPS),
+                "-pix_fmt", "yuv420p", "-f", "rawvideo", "pipe:1",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            print("screen pump: ffmpeg started", flush=True)
+            try:
+                while True:
+                    buf = await proc.stdout.readexactly(fsz)
+                    try:
+                        await call.send_frame(CHAT, Device.SCREEN, buf, info)
+                    except Exception:
+                        pass
+            except asyncio.IncompleteReadError:
+                print("screen pump: ffmpeg ended, restarting", flush=True)
+            finally:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            await asyncio.sleep(0.5)
+
     await call.start()
     # Silence the fork's verbose WebRTC logging (constructor sets LS_INFO). That
     # log flood runs on the event loop and starves the 10ms send pump -> audio
@@ -174,11 +207,21 @@ async def main():
         print("ntgcalls logging silenced (4=NONE)", flush=True)
     except Exception as e:
         print(f"set_log_level unavailable: {e}", flush=True)
-    await call.play(CHAT, MediaStream(media_path=ExternalMedia.AUDIO,
-                                      audio_parameters=AudioParameters(48000, 1)),
+    # Outgoing: external microphone (Polly TTS via send_frame) + optional
+    # external screen (deck video via send_frame SCREEN -> joins as presentation).
+    from pytgcalls.types.raw import AudioStream, Stream, VideoStream, VideoParameters
+    from ntgcalls import MediaSource
+    mic = AudioStream(media_source=MediaSource.EXTERNAL, path="",
+                      parameters=AudioParameters(48000, 1))
+    scr = (VideoStream(media_source=MediaSource.EXTERNAL, path="",
+                       parameters=VideoParameters(SCREEN_W, SCREEN_H, SCREEN_FPS))
+           if PRESENT else None)
+    await call.play(CHAT, Stream(microphone=mic, screen=scr),
                     config=GroupCallConfig(auto_start=True))
     await call.record(CHAT, RecordStream(audio=True, audio_parameters=AudioParameters(48000, 1)))
     asyncio.create_task(_sender())
+    if PRESENT:
+        asyncio.create_task(_screen_pump())
     if os.environ.get("STT_ENABLED", "0") == "1":  # inbound voice capture
         stt = TranscribeStreamer(locale=STT_LOCALE, on_final=on_utt)
 
