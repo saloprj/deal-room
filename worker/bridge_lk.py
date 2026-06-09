@@ -91,9 +91,16 @@ async def main():
             print(f"self_ssrc={st['self_ssrc']}", flush=True)
 
     in_q: asyncio.Queue[bytes] = asyncio.Queue()
+    seen_combos: set = set()
 
     @call.on_update(fl.stream_frame())
     async def _frames(_, u: StreamFrames):
+        combo = (getattr(u.direction, "name", str(u.direction)),
+                 getattr(u.device, "name", str(u.device)))
+        if combo not in seen_combos:
+            seen_combos.add(combo)
+            print(f"[bridge] stream_frame combo {combo} ssrcs={[f.ssrc for f in u.frames]} "
+                  f"self={st['self_ssrc']}", flush=True)
         for fr in u.frames:
             if st["self_ssrc"] is not None and fr.ssrc == st["self_ssrc"]:
                 continue
