@@ -67,6 +67,8 @@ class VoiceWorker:
         self.out_q: asyncio.Queue[bytes] = asyncio.Queue()
         self.stt = None  # TranscribeStreamer, set in run()
         self._last_approved = False
+        self._last_rejected = False
+        self._last_note = None
 
     # ---- output: 10 ms send_frame cadence (proven path) ----
     async def _sender(self):
@@ -99,12 +101,21 @@ class VoiceWorker:
         turn = self.session.handle(en)
         await self.speak(turn.reply)
 
-    async def _approve_poller(self):
+    async def _control_poller(self):
+        """Consume operator decisions from the dashboard (human-in-the-loop)."""
         while True:
             item = self.store.get(self.call_id) or {}
-            if item.get("status") == "awaiting_approval" and item.get("approved") and not self._last_approved:
+            st, cmd, note = item.get("status"), item.get("command"), item.get("operator_note")
+            if st == "awaiting_approval" and item.get("approved") and not self._last_approved:
                 self._last_approved = True
-                await self.speak(self.session.approve())
+                self.session.approve()  # posts Stripe link to store + transcript
+                await self.speak("Perfect — I've just dropped your secure payment link in the chat. Take your time.")
+            elif cmd == "reject" and not self._last_rejected:
+                self._last_rejected = True
+                await self.speak(self.session.reject())
+            elif cmd == "nudge" and note and note != self._last_note:
+                self._last_note = note
+                await self.speak(note)  # operator-injected line, spoken (translated)
             await asyncio.sleep(1.0)
 
     async def run(self):
@@ -146,7 +157,7 @@ class VoiceWorker:
         from stt import TranscribeStreamer  # local import; needs amazon-transcribe
         self.stt = TranscribeStreamer(locale=STT_LOCALE, on_final=self._on_utterance)
         asyncio.create_task(self._sender())
-        asyncio.create_task(self._approve_poller())
+        asyncio.create_task(self._control_poller())
         asyncio.create_task(self.stt.run())
 
         await self.speak(self.session.start())  # opening line

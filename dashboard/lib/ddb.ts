@@ -54,3 +54,22 @@ export async function setApproved(id: string) {
     ExpressionAttributeValues: { ":t": true, ":c": "approve", ":u": Math.floor(Date.now() / 1000) },
   }));
 }
+
+export async function setRejected(id: string) {
+  await ddb.send(new UpdateCommand({
+    TableName: TABLE, Key: { call_id: id },
+    UpdateExpression: "SET approved = :f, command = :c, #s = :live, updated_at = :u",
+    ExpressionAttributeNames: { "#s": "status" },
+    ExpressionAttributeValues: { ":f": false, ":c": "reject", ":live": "live", ":u": Math.floor(Date.now() / 1000) },
+  }));
+}
+
+export async function addNudge(id: string, text: string) {
+  const entry = { speaker: "operator", text, ts: Math.floor(Date.now() / 1000) };
+  await ddb.send(new UpdateCommand({
+    TableName: TABLE, Key: { call_id: id },
+    UpdateExpression:
+      "SET command = :c, operator_note = :n, transcript = list_append(if_not_exists(transcript, :e), :t), updated_at = :u",
+    ExpressionAttributeValues: { ":c": "nudge", ":n": text, ":t": [entry], ":e": [], ":u": Math.floor(Date.now() / 1000) },
+  }));
+}

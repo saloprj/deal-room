@@ -102,6 +102,13 @@ class DealRoomSession:
         self.store.append_transcript(self.call_id, "agent", reply)
         return reply
 
+    def reject(self) -> str:
+        """Operator declined the close — agent backs off gracefully (HITL override)."""
+        self.store.set(self.call_id, status="live", approved=False, command="none")
+        reply = "No pressure at all — we can keep talking, or I can follow up whenever suits you."
+        self.store.append_transcript(self.call_id, "agent", reply)
+        return reply
+
     def payment_confirmed(self) -> str:
         self.store.set(self.call_id, status="done", payment_status="paid")
         reply = "Payment received — you're all set. Welcome aboard! 🎉"
