@@ -64,15 +64,19 @@ async def main():
             st["self_ssrc"] = u.participant.source
             print(f"self_ssrc={st['self_ssrc']}", flush=True)
 
+    seen_combos: set = set()
+
     @call.on_update(fl.stream_frame())
     async def _frames(_, u: StreamFrames):
-        d = getattr(u.direction, "name", str(u.direction))
-        dev = getattr(u.device, "name", str(u.device))
-        nbytes = sum(len(f.frame) for f in u.frames)
-        if st["fed"] % 50 == 0:
-            print(f"frame dir={d} dev={dev} n={len(u.frames)} bytes={nbytes}", flush=True)
-        if d != "INCOMING":
-            return
+        # DialogBrain learned the naive INCOMING+SPEAKER filter never matches —
+        # discover the real combo at runtime and feed any non-self ssrc.
+        combo = (getattr(u.direction, "name", str(u.direction)),
+                 getattr(u.device, "name", str(u.device)))
+        if combo not in seen_combos:
+            seen_combos.add(combo)
+            print(f"stream_frame combo dir={combo[0]} dev={combo[1]} ssrcs="
+                  f"{[f.ssrc for f in u.frames]} bytes="
+                  f"{u.frames[0].frame.__len__() if u.frames else 0}", flush=True)
         if st["speaking"] or stt is None:
             return
         for fr in u.frames:
