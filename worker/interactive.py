@@ -125,7 +125,18 @@ async def main():
         print(f"[lat] tts={tts_ms:.0f}ms dur={dur:.1f}s", flush=True)
         st["speaking"] = True
         try:
-            await call.play(CHAT, MediaStream(path), config=GroupCallConfig(auto_start=True))
+            # Retry on "Connection not found": the ntgcalls media binding can lag
+            # the MTProto join by a second or two right after joining.
+            for attempt in range(8):
+                try:
+                    await call.play(CHAT, MediaStream(path),
+                                    config=GroupCallConfig(auto_start=True))
+                    break
+                except Exception as e:
+                    if attempt < 7 and ("not found" in str(e).lower() or "connection" in str(e).lower()):
+                        await asyncio.sleep(1.2)
+                        continue
+                    raise
             # Deterministic wait = actual audio duration (+tail). Don't depend on
             # the stream_end event — a missed event would otherwise hang.
             await asyncio.sleep(dur + 0.5)
@@ -193,10 +204,18 @@ async def main():
         print(f"set_log_level unavailable: {e}", flush=True)
 
     await asyncio.to_thread(session.store.create_call, session.call_id, status="live")
-    # First play() joins the call (auto_start) and greets.
+    # First speak() joins the call (auto_start, with play-retry) and greets —
+    # this also establishes the media connection.
     await speak("Hi! I'm the DialogBrain agent. Ask me anything about what we do.")
-    # Now register inbound capture and start listening.
-    await call.record(CHAT, RecordStream(audio=True, audio_parameters=AudioParameters(48000, 1)))
+    # Register inbound capture; retry until the media connection slot exists.
+    for attempt in range(10):
+        try:
+            await call.record(CHAT, RecordStream(audio=True,
+                                                 audio_parameters=AudioParameters(48000, 1)))
+            break
+        except Exception as e:
+            print(f"[record] retry {attempt}: {e}", flush=True)
+            await asyncio.sleep(1.5)
     if os.environ.get("STT_ENABLED", "1") == "1":
         stt = TranscribeStreamer(locale=STT_LOCALE, on_final=on_utt)
 
