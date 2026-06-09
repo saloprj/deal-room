@@ -3,3 +3,5 @@ exa-py>=1.0
 telethon==1.37.0
 py-tgcalls==2.2.11
 stripe>=9.0
+numpy>=1.26
+amazon-transcribe>=0.6.2
