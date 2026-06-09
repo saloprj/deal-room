@@ -18,4 +18,3 @@ dist/
 # vercel
 .vercel
 worker/deck.html
-deck.html
