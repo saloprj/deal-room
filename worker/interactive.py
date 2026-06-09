@@ -86,6 +86,11 @@ async def main():
             st["fed"] += 1
 
     async def _sender():
+        # Drift-compensated 10ms cadence: schedule each frame against a fixed
+        # clock so time spent in send_frame doesn't slow the stream (which
+        # caused stretched/gappy audio with a plain sleep(0.01)).
+        loop = asyncio.get_running_loop()
+        next_t = loop.time()
         while True:
             try:
                 chunk = out_q.get_nowait()
@@ -95,19 +100,31 @@ async def main():
                 await call.send_frame(CHAT, Device.MICROPHONE, chunk)
             except Exception:
                 pass
-            await asyncio.sleep(0.01)
+            next_t += 0.01
+            delay = next_t - loop.time()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            else:
+                next_t = loop.time()  # fell behind — resync, don't spiral
 
     async def speak(text: str):
         say = voice.translate(text, source="en", target=PLANG) if PLANG != "en" else text
         pcm = voice.synthesize_pcm48k(say, PLANG)
         st["speaking"] = True
+        # Enqueue the WHOLE utterance synchronously (no await between frames) so
+        # the sender never finds the queue momentarily empty mid-word and pads
+        # silence into the middle of a syllable.
+        nframes = 0
         for i in range(0, len(pcm), FRAME_BYTES):
             fr = pcm[i:i + FRAME_BYTES]
             if len(fr) < FRAME_BYTES:
                 fr = fr + b"\x00" * (FRAME_BYTES - len(fr))
-            await out_q.put(fr)
-        # hold the gate for the audio duration + small tail, then reopen ears
-        await asyncio.sleep(len(pcm) / (48000 * 2) + 0.8)
+            out_q.put_nowait(fr)
+            nframes += 1
+        # hold the gate until the queue has actually drained + a small tail.
+        while out_q.qsize() > 0:
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(0.6)
         st["speaking"] = False
 
     async def on_utt(text: str):
