@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 
 from livekit import api, rtc
 from telethon import TelegramClient
@@ -24,7 +25,9 @@ CHAT = int(os.environ["TG_GROUP_ID"])
 LK_URL = os.environ["LIVEKIT_URL"]
 LK_KEY = os.environ["LIVEKIT_API_KEY"]
 LK_SECRET = os.environ["LIVEKIT_API_SECRET"]
-ROOM = os.environ.get("LK_ROOM", "dealroom")
+# Fresh room per run so LiveKit auto-dispatches the agent (a reused room with a
+# prior failed job won't re-dispatch).
+ROOM = os.environ.get("LK_ROOM") or f"dealroom-{int(time.time())}"
 FRAME_BYTES = 960  # 10ms @ 48k mono s16le
 SILENCE = b"\x00" * FRAME_BYTES
 
