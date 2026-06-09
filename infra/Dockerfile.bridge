@@ -1,0 +1,16 @@
+# TG <-> LiveKit bridge — py-tgcalls fork (TG audio) + livekit-rtc (LK room).
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg libssl3 ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+RUN pip install --no-cache-dir \
+    py-tgcalls==2.2.11 "telethon==1.37.0" numpy livekit livekit-api
+
+# Overlay the compiled ntgcalls FORK (group-call inbound capture).
+COPY ntgcalls_fork.so /usr/local/lib/python3.11/site-packages/ntgcalls.cpython-311-x86_64-linux-gnu.so
+
+COPY worker/ .
+CMD ["python", "-u", "bridge_lk.py"]
