@@ -25,8 +25,14 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 import voice
-from session import DealRoomSession
+from session import DealRoomSession, PRODUCT_CONTEXT
 from stt import TranscribeStreamer
+
+# Explicit buy signals route to the full close flow (Stripe + human approval);
+# everything else takes the fast single-LLM-call answer path.
+_BUY_SIGNALS = ("buy", "sign up", "sign me up", "let's do it", "lets do it",
+                "deposit", "purchase", "take my money", "i'm in", "im in",
+                "subscribe", "send me the link", "how do i pay", "let's close")
 
 CHAT = int(os.environ["TG_GROUP_ID"])
 PLANG = os.environ.get("DEAL_PROSPECT_LANG", "en")
@@ -128,13 +134,30 @@ async def main():
     async def on_utt(text: str):
         if st["speaking"]:
             return
+        t0 = time.time()
         print(f"heard: {text!r}", flush=True)
         en = text
         if PLANG != "en":
             en = await asyncio.to_thread(voice.translate, text, source=PLANG, target="en")
-        turn = await asyncio.to_thread(session.handle, en)  # Bedrock + DDB off-loop
-        print(f"answering [{turn.action}]: {turn.reply[:90]!r}", flush=True)
-        await speak(turn.reply)
+
+        if any(k in en.lower() for k in _BUY_SIGNALS):
+            # Full agentic path (orchestrator -> Stripe close + human approval).
+            turn = await asyncio.to_thread(session.handle, en)
+            reply = turn.reply
+        else:
+            # FAST path: one Bedrock call, short spoken reply. Skips the extra
+            # orchestrator round-trip that doubled latency.
+            reply = await asyncio.to_thread(
+                session.llm.complete,
+                f'Prospect said: "{en}". Reply in 1-2 short, natural spoken sentences.',
+                system=PRODUCT_CONTEXT, max_tokens=110)
+            # transcript writes go in the background — don't delay speaking.
+            asyncio.create_task(asyncio.to_thread(
+                session.store.append_transcript, session.call_id, "prospect", en))
+            asyncio.create_task(asyncio.to_thread(
+                session.store.append_transcript, session.call_id, "agent", reply))
+        print(f"answering ({time.time()-t0:.1f}s think): {reply[:80]!r}", flush=True)
+        await speak(reply)
 
     async def _dash_poller():
         """Dashboard 'Talk to the agent' questions -> spoken answer in the call."""
