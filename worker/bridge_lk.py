@@ -160,19 +160,72 @@ async def main():
             else:
                 nt = loop.time()
 
-    await call.start()
-    try:
+    # --- ported from DialogBrain call_manager: robust group-call join ---
+    async def _refresh_full_chat():
+        # Re-pull full_chat so pytgcalls' next JoinGroupCall sees a fresh
+        # InputGroupCall (stale cache -> InterdcCallError/GroupcallInvalid).
+        try:
+            from telethon.tl.functions.messages import GetFullChatRequest
+            from telethon.tl.functions.channels import GetFullChannelRequest
+            from telethon.tl.types import InputPeerChat, InputPeerChannel, InputChannel
+            ip = await asyncio.wait_for(client.get_input_entity(CHAT), timeout=3.0)
+            if isinstance(ip, InputPeerChat):
+                await asyncio.wait_for(client(GetFullChatRequest(chat_id=ip.chat_id)), timeout=3.0)
+            elif isinstance(ip, InputPeerChannel):
+                await asyncio.wait_for(client(GetFullChannelRequest(
+                    channel=InputChannel(channel_id=ip.channel_id, access_hash=ip.access_hash)), ), timeout=3.0)
+            print("[join] full_chat refreshed", flush=True)
+        except Exception as e:
+            print(f"[join] full_chat refresh failed: {e}", flush=True)
+
+    async def robust_join():
         from ntgcalls import set_log_level
-        set_log_level(4)
-    except Exception:
-        pass
-    await call.play(CHAT, MediaStream(media_path=ExternalMedia.AUDIO,
-                                      audio_parameters=AudioParameters(48000, 1)),
-                    config=GroupCallConfig(auto_start=True))
-    await call.record(CHAT, RecordStream(audio=True, audio_parameters=AudioParameters(48000, 1)))
-    asyncio.create_task(_sender())     # LK agent audio -> TG
-    asyncio.create_task(_lk_pump())    # TG prospect audio -> LK (continuous)
-    print("BRIDGE up — TG <-> LiveKit", flush=True)
+        try:
+            set_log_level(4)
+        except Exception:
+            pass
+        MAX, SLEEP = 12, 1.5
+        for attempt in range(1, MAX + 1):
+            try:
+                await call.play(CHAT, MediaStream(media_path=ExternalMedia.AUDIO,
+                                                  audio_parameters=AudioParameters(48000, 1)),
+                                config=GroupCallConfig(auto_start=True))
+                await call.record(CHAT, RecordStream(audio=True,
+                                                     audio_parameters=AudioParameters(48000, 1)))
+                print(f"[join] connected on attempt {attempt}", flush=True)
+                return True
+            except Exception as e:
+                msg = str(e).lower()
+                print(f"[join] attempt {attempt}/{MAX} failed: {e}", flush=True)
+                # clean any half-bound slot
+                try:
+                    await asyncio.wait_for(call.leave_call(CHAT), timeout=2.0)
+                except Exception:
+                    pass
+                await _refresh_full_chat()
+                # every 4th failure: Telethon reconnect to evict server-cached call
+                if attempt % 4 == 0:
+                    print("[join] reconnecting Telethon to evict cached state", flush=True)
+                    try:
+                        await asyncio.wait_for(client.disconnect(), timeout=3.0)
+                    except Exception:
+                        pass
+                    try:
+                        await asyncio.wait_for(client.connect(), timeout=10.0)
+                        await client.get_dialogs()
+                        await client.get_entity(CHAT)
+                    except Exception as ce:
+                        print(f"[join] reconnect failed: {ce}", flush=True)
+                await asyncio.sleep(SLEEP)
+        print("[join] EXHAUSTED retries — could not connect media", flush=True)
+        return False
+
+    await call.start()
+    ok = await robust_join()
+    if ok:
+        asyncio.create_task(_sender())     # LK agent audio -> TG
+        asyncio.create_task(_lk_pump())    # TG prospect audio -> LK (continuous)
+        print("BRIDGE up — TG <-> LiveKit", flush=True)
     while True:
         await asyncio.sleep(3600)
 
