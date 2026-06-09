@@ -107,17 +107,26 @@ async def main():
         # the agent's Transcribe never times out (15s no-audio = session death).
         loop = asyncio.get_running_loop()
         nt = loop.time()
+        n = 0
+        real = 0
+        errs = 0
         while True:
             try:
                 data = in_q.get_nowait()
+                real += 1
             except asyncio.QueueEmpty:
                 data = SILENCE
             if len(data) != FRAME_BYTES:
                 data = (data + SILENCE)[:FRAME_BYTES]
             try:
                 await src.capture_frame(rtc.AudioFrame(data, 48000, 1, FRAME_BYTES // 2))
-            except Exception:
-                pass
+            except Exception as e:
+                errs += 1
+                if errs <= 2:
+                    print(f"[lk_pump] capture_frame err: {e}", flush=True)
+            n += 1
+            if n % 500 == 0:
+                print(f"[lk_pump] pushed={n} real_tg={real} errs={errs}", flush=True)
             nt += 0.01
             d = nt - loop.time()
             if d > 0:
