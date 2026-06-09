@@ -90,16 +90,40 @@ async def main():
             st["self_ssrc"] = u.participant.source
             print(f"self_ssrc={st['self_ssrc']}", flush=True)
 
+    in_q: asyncio.Queue[bytes] = asyncio.Queue()
+
     @call.on_update(fl.stream_frame())
     async def _frames(_, u: StreamFrames):
         for fr in u.frames:
             if st["self_ssrc"] is not None and fr.ssrc == st["self_ssrc"]:
                 continue
-            data = fr.frame
             try:
-                await src.capture_frame(rtc.AudioFrame(data, 48000, 1, len(data) // 2))
+                in_q.put_nowait(fr.frame)
             except Exception:
                 pass
+
+    async def _lk_pump():
+        # Continuous 48k stream into the LK room (real TG frames or silence) so
+        # the agent's Transcribe never times out (15s no-audio = session death).
+        loop = asyncio.get_running_loop()
+        nt = loop.time()
+        while True:
+            try:
+                data = in_q.get_nowait()
+            except asyncio.QueueEmpty:
+                data = SILENCE
+            if len(data) != FRAME_BYTES:
+                data = (data + SILENCE)[:FRAME_BYTES]
+            try:
+                await src.capture_frame(rtc.AudioFrame(data, 48000, 1, FRAME_BYTES // 2))
+            except Exception:
+                pass
+            nt += 0.01
+            d = nt - loop.time()
+            if d > 0:
+                await asyncio.sleep(d)
+            else:
+                nt = loop.time()
 
     async def _sender():
         loop = asyncio.get_running_loop()
@@ -130,7 +154,8 @@ async def main():
                                       audio_parameters=AudioParameters(48000, 1)),
                     config=GroupCallConfig(auto_start=True))
     await call.record(CHAT, RecordStream(audio=True, audio_parameters=AudioParameters(48000, 1)))
-    asyncio.create_task(_sender())
+    asyncio.create_task(_sender())     # LK agent audio -> TG
+    asyncio.create_task(_lk_pump())    # TG prospect audio -> LK (continuous)
     print("BRIDGE up — TG <-> LiveKit", flush=True)
     while True:
         await asyncio.sleep(3600)
