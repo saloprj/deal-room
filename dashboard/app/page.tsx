@@ -5,7 +5,9 @@ type Turn = { speaker: string; text: string; ts: number };
 type Call = {
   call_id: string; status: string; transcript: Turn[]; command: string;
   approved: boolean; payment_status: string; checkout_url: string; updated_at: number;
+  chat_id?: string; chat_title?: string; deck_url?: string;
 };
+type Chat = { chat_id: string; title: string; members?: number };
 
 const chipClass = (s: string) =>
   s === "live" ? "live" : s === "awaiting_approval" ? "wait" : s === "done" || s === "closing" ? "done" : "";
@@ -16,12 +18,35 @@ export default function Home() {
   const [summary, setSummary] = useState("");
   const [busy, setBusy] = useState(false);
   const [nudge, setNudge] = useState("");
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [dispatching, setDispatching] = useState<string | null>(null);
+  const [ask, setAsk] = useState("");
+  const [asking, setAsking] = useState(false);
 
   const refresh = useCallback(async () => {
     const r = await fetch("/api/state", { cache: "no-store" });
     setCall((await r.json()).call || null);
   }, []);
+  const loadChats = useCallback(async () => {
+    const r = await fetch("/api/chats", { cache: "no-store" });
+    setChats((await r.json()).chats || []);
+  }, []);
   useEffect(() => { refresh(); const t = setInterval(refresh, 2000); return () => clearInterval(t); }, [refresh]);
+  useEffect(() => { loadChats(); const t = setInterval(loadChats, 15000); return () => clearInterval(t); }, [loadChats]);
+
+  const dispatch = async (c: Chat) => {
+    setDispatching(c.chat_id);
+    await fetch("/api/dispatch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: c.chat_id, title: c.title }) });
+    await refresh(); setDispatching(null);
+  };
+
+  const sendAsk = async () => {
+    const q = ask.trim();
+    if (!q) return;
+    setAsking(true); setAsk("");
+    await fetch("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ call_id: call?.call_id, text: q }) });
+    await refresh(); setAsking(false);
+  };
 
   const post = async (url: string, body?: any) => {
     setBusy(true);
@@ -54,6 +79,40 @@ export default function Home() {
         <button className="ghost" onClick={getSummary} disabled={!call}>✶ AI summary · via Vercel AI Gateway</button>
       </div>
 
+      <div className="card">
+        <h3>Chats · dispatch the agent</h3>
+        <div className="empty" style={{ marginBottom: 12 }}>
+          Telegram groups the agent can join (synced from the worker account). Pick one — the agent joins its voice call and presents.
+        </div>
+        {!chats.length && <div className="empty">No chats synced yet… (worker publishes them on boot)</div>}
+        <div className="chatlist">
+          {chats.map((c) => (
+            <div className="chatrow" key={c.chat_id}>
+              <div className="chatmeta">
+                <div className="chatname">{c.title}</div>
+                <div className="chatsub">{c.members ? `${c.members} members · ` : ""}{c.chat_id}</div>
+              </div>
+              <button className="dispatch" onClick={() => dispatch(c)} disabled={dispatching === c.chat_id}>
+                {dispatching === c.chat_id ? "Dispatching…" : "▶ Dispatch agent"}
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>Talk to the agent · live Q&amp;A</h3>
+        <div className="empty" style={{ marginBottom: 10 }}>
+          Ask anything a prospect would — pricing, product, “do you support X?”. The agent answers on AWS (Bedrock + live Exa research), and closes via Stripe when you’re ready.
+        </div>
+        <div className="nudge">
+          <input value={ask} onChange={(e) => setAsk(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && sendAsk()}
+            placeholder="e.g. How do you handle multilingual calls? What does it cost?" />
+          <button onClick={sendAsk} disabled={asking || !ask.trim()}>{asking ? "Asking…" : "Ask"}</button>
+        </div>
+      </div>
+
       {awaiting && (
         <div className="decision">
           <div className="eyebrow"><span className="bulb" />Human-in-the-loop · decision required</div>
@@ -67,6 +126,13 @@ export default function Home() {
       )}
 
       {!call && <div className="card"><div className="empty">No active call. Hit “Start call”, or launch the worker into a Telegram voice chat.</div></div>}
+
+      {call?.deck_url && (
+        <div className="card">
+          <h3>Presentation · rendered on AWS</h3>
+          <video src={call.deck_url} controls playsInline className="deckvid" />
+        </div>
+      )}
 
       {call && (
         <div className="grid">

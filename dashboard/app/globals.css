@@ -109,3 +109,17 @@ button.reject { background: transparent; color: var(--red); border-color: rgba(2
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes slamIn { from { opacity: 0; transform: translateY(-12px) scale(.99); } to { opacity: 1; transform: none; } }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+/* Chats · dispatch */
+.chatlist { display: grid; gap: 10px; }
+.chatrow { display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.chatrow:hover { border-color: rgba(76,194,255,.35); }
+.chatmeta { min-width: 0; }
+.chatname { font-weight: 600; font-size: 15px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chatsub { font-family: var(--mono); font-size: 11.5px; color: var(--mute); margin-top: 3px; }
+button.dispatch { background: var(--cyan); color: #051018; border-color: transparent; font-weight: 700; white-space: nowrap; }
+button.dispatch:disabled { opacity: .55; cursor: default; }
+
+/* Presentation video */
+.deckvid { width: 100%; border-radius: 12px; border: 1px solid var(--line); background: #000; display: block; }
