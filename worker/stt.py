@@ -6,6 +6,7 @@ Consumes 16 kHz mono s16le PCM fed from pytgcalls inbound frames and calls
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Awaitable, Callable
 
 from amazon_transcribe.client import TranscribeStreamingClient
@@ -19,14 +20,20 @@ class _Handler(TranscriptResultStreamHandler):
     def __init__(self, output_stream, on_final: Callable[[str], Awaitable[None]]):
         super().__init__(output_stream)
         self._on_final = on_final
+        self._last_partial_t = None  # ~ when the user stopped producing new words
 
     async def handle_transcript_event(self, event: TranscriptEvent):
+        now = time.time()
         for result in event.transcript.results:
             if result.is_partial:
+                self._last_partial_t = now
                 continue
             for alt in result.alternatives:
                 text = (alt.transcript or "").strip()
                 if text:
+                    lag = (now - self._last_partial_t) if self._last_partial_t else -1
+                    print(f"[lat] stt endpoint_lag={lag:.2f}s final={text[:40]!r}", flush=True)
+                    self._last_partial_t = None
                     await self._on_final(text)
 
 

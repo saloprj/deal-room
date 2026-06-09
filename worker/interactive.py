@@ -114,22 +114,30 @@ async def main():
         say = text
         if PLANG != "en":
             say = await asyncio.to_thread(voice.translate, text, source="en", target=PLANG)
+        _t = time.time()
         mp3 = await asyncio.to_thread(voice.synthesize_mp3, say, PLANG)
+        tts_ms = (time.time() - _t) * 1000
         seq["n"] += 1
         path = f"/tmp/say_{seq['n']}.mp3"
         with open(path, "wb") as f:
             f.write(mp3)
         dur = await asyncio.to_thread(_probe_dur, path)
+        print(f"[lat] tts={tts_ms:.0f}ms dur={dur:.1f}s", flush=True)
         st["speaking"] = True
-        await call.play(CHAT, MediaStream(path), config=GroupCallConfig(auto_start=True))
-        # Deterministic wait = actual audio duration (+tail). Don't depend on the
-        # stream_end event — a missed event would otherwise hang the agent.
-        await asyncio.sleep(dur + 0.5)
-        st["speaking"] = False
         try:
-            os.remove(path)
-        except OSError:
-            pass
+            await call.play(CHAT, MediaStream(path), config=GroupCallConfig(auto_start=True))
+            # Deterministic wait = actual audio duration (+tail). Don't depend on
+            # the stream_end event — a missed event would otherwise hang.
+            await asyncio.sleep(dur + 0.5)
+        except Exception as e:
+            print(f"[speak] play error: {e}", flush=True)
+        finally:
+            # ALWAYS reopen the ears — a stuck gate makes David permanently deaf.
+            st["speaking"] = False
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     async def on_utt(text: str):
         if st["speaking"]:
@@ -140,23 +148,26 @@ async def main():
         if PLANG != "en":
             en = await asyncio.to_thread(voice.translate, text, source=PLANG, target="en")
 
-        if any(k in en.lower() for k in _BUY_SIGNALS):
-            # Full agentic path (orchestrator -> Stripe close + human approval).
-            turn = await asyncio.to_thread(session.handle, en)
-            reply = turn.reply
-        else:
-            # FAST path: one Bedrock call, short spoken reply. Skips the extra
-            # orchestrator round-trip that doubled latency.
-            reply = await asyncio.to_thread(
-                session.llm.complete,
-                f'Prospect said: "{en}". Reply in 1-2 short, natural spoken sentences.',
-                system=PRODUCT_CONTEXT, max_tokens=110)
-            # transcript writes go in the background — don't delay speaking.
-            asyncio.create_task(asyncio.to_thread(
-                session.store.append_transcript, session.call_id, "prospect", en))
-            asyncio.create_task(asyncio.to_thread(
-                session.store.append_transcript, session.call_id, "agent", reply))
-        print(f"answering ({time.time()-t0:.1f}s think): {reply[:80]!r}", flush=True)
+        _l = time.time()
+        try:
+            if any(k in en.lower() for k in _BUY_SIGNALS):
+                # Full agentic path (orchestrator -> Stripe close + human approval).
+                turn = await asyncio.to_thread(session.handle, en)
+                reply = turn.reply
+            else:
+                # FAST path: one Bedrock call, short spoken reply.
+                reply = await asyncio.to_thread(
+                    session.llm.complete,
+                    f'Prospect said: "{en}". Reply in 1-2 short, natural spoken sentences.',
+                    system=PRODUCT_CONTEXT, max_tokens=110)
+                asyncio.create_task(asyncio.to_thread(
+                    session.store.append_transcript, session.call_id, "prospect", en))
+                asyncio.create_task(asyncio.to_thread(
+                    session.store.append_transcript, session.call_id, "agent", reply))
+        except Exception as e:
+            print(f"[lat] llm ERROR after {time.time()-_l:.1f}s: {e}", flush=True)
+            reply = "Sorry, could you say that again?"
+        print(f"[lat] llm={time.time()-_l:.1f}s think_total={time.time()-t0:.1f}s -> {reply[:70]!r}", flush=True)
         await speak(reply)
 
     async def _dash_poller():
