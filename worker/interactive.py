@@ -39,6 +39,18 @@ def _ds_48_16(pcm: bytes) -> bytes:
     return s[::3].tobytes() if s.size else b""
 
 
+def _probe_dur(path: str) -> float:
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", path],
+            capture_output=True, text=True, timeout=10).stdout.strip()
+        return float(out)
+    except Exception:
+        return 8.0
+
+
 async def main():
     client = TelegramClient(StringSession(os.environ["TG_SESSION_STRING"]),
                             int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"])
@@ -101,14 +113,12 @@ async def main():
         path = f"/tmp/say_{seq['n']}.mp3"
         with open(path, "wb") as f:
             f.write(mp3)
+        dur = await asyncio.to_thread(_probe_dur, path)
         st["speaking"] = True
-        play_done.clear()
         await call.play(CHAT, MediaStream(path), config=GroupCallConfig(auto_start=True))
-        try:
-            await asyncio.wait_for(play_done.wait(), timeout=120)
-        except asyncio.TimeoutError:
-            pass
-        await asyncio.sleep(0.4)  # let the tail flush before reopening ears
+        # Deterministic wait = actual audio duration (+tail). Don't depend on the
+        # stream_end event — a missed event would otherwise hang the agent.
+        await asyncio.sleep(dur + 0.5)
         st["speaking"] = False
         try:
             os.remove(path)
