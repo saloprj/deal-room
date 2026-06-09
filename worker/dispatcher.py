@@ -75,15 +75,18 @@ def stream_into_call(call_id: str, chat_id: str, store: CallStore) -> None:
         from pytgcalls import PyTgCalls
         from pytgcalls.types import GroupCallConfig, MediaStream
         await client.start()
+        # Populate the entity cache so pytgcalls can resolve the chat peer
+        # (a fresh StringSession has no dialog cache -> "Cannot cast NoneType to Peer").
+        await client.get_dialogs()
+        await client.get_entity(int(chat_id))  # prime cache; pass the id to play()
         call = PyTgCalls(client)
         await call.start()
+        # join-or-create and STAY (leaving would end the call for everyone).
         await call.play(int(chat_id), MediaStream("deck.mp4"),
                         config=GroupCallConfig(auto_start=True))
         store.set(call_id, status="live")
         store.append_transcript(call_id, "agent", "Live in the call — presenting now.")
-        # Hold while the deck plays; the control poller handles approve/reject.
-        await asyncio.sleep(180)
-        await client.disconnect()
+        await asyncio.sleep(300)  # present; do not leave (keeps the call alive)
 
     asyncio.run(_go())
 
