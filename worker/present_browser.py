@@ -45,7 +45,9 @@ def _jpeg_to_i420(jpeg: bytes, w: int, h: int) -> bytes:
 
 
 class LivePresenter:
-    def __init__(self, width: int = 1280, height: int = 720, fps: int = 3):
+    # 960x540 @ 2fps: ~780KB/frame (vs 1.38MB at 720p) and half the cadence, so the
+    # screen pump stops starving the 10ms audio pacing (was causing audio to stutter).
+    def __init__(self, width: int = 960, height: int = 540, fps: int = 2):
         self.w, self.h, self.fps = width, height, fps
         self._pw = None
         self.browser = None

@@ -61,7 +61,13 @@ _FILLERS = {"oh", "uh", "um", "hmm", "mhm", "huh", "ah", "er", "uh-huh", "mm"}
 _BUY_SIGNALS = ("buy", "sign up", "sign me up", "let's do it", "lets do it",
                 "deposit", "purchase", "take my money", "i'm in", "im in",
                 "subscribe", "send me the link", "send the link", "how do i pay",
-                "ready to pay", "i'll pay", "ill pay", "let's close", "pay now")
+                "ready to pay", "i'll pay", "ill pay", "let's close", "pay now",
+                "payment", "to pay", "want to pay", "let's pay", "lets pay",
+                "checkout", "the link", "send link", "go to payment")
+# Stop the auto-walk and move to Q&A / closing.
+_STOP_WALK = ("stop", "end presentation", "end the presentation", "that's enough",
+              "thats enough", "skip the rest", "finish", "wrap up", "i'm done",
+              "im done", "that's all", "enough")
 _PRESENT_SIGNALS = ("presentation", "present the deck", "show me the deck",
                     "show the deck", "show slides", "show me slides", "the slides",
                     "walk me through the deck", "show me a demo", "see the deck")
@@ -222,8 +228,11 @@ class DemoSession:
         Listen-through-narration when we know our own ssrc (barge-in); otherwise gate
         STT deaf while we talk so we don't transcribe our own voice."""
         pcm = await asyncio.to_thread(voice.synthesize_pcm48k, say, PLANG)
-        deaf = self.st.get("self_ssrc") is None
-        self.st["speaking"] = deaf
+        # Always deaf while we narrate: the SFU re-mixes our own voice back under a
+        # different ssrc than self_ssrc, so it leaks past the filter and gets
+        # transcribed as junk fragments ('I', 'um') that drown the prospect's
+        # commands. We listen in the gaps between slides instead.
+        self.st["speaking"] = True
         try:
             for i in range(0, len(pcm), FRAME_BYTES_OUT):
                 if self.done or self._barge:
@@ -347,7 +356,7 @@ class DemoSession:
                 await self.speak(self._narr_for(i))
                 if self.done or self._barge:
                     break
-                await self._listen_gap(1.0)        # interruption window between slides
+                await self._listen_gap(2.5)        # window to say next/back/stop/pay
         finally:
             self.presenting = False
         # Screen-share stays live for Q&A; the prospect drives nav by voice now.
@@ -439,6 +448,13 @@ class DemoSession:
         if any(k in low for k in _BUY_SIGNALS):
             print(f"[demo {self.chat_id}] BUY signal -> stripe", flush=True)
             await self.send_payment_link()
+            return
+
+        # Stop the auto-walk -> move to questions / closing.
+        if self.presenter is not None and any(k in low for k in _STOP_WALK):
+            print(f"[demo {self.chat_id}] stop-walk", flush=True)
+            await self.speak("Sure. Happy to answer any questions — or just say you're "
+                             "ready and I'll send the secure payment link.")
             return
 
         # Voice slide navigation (only once a live screen-share deck is up).
