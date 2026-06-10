@@ -118,6 +118,8 @@ class DemoSession:
         self.st = {"self_ssrc": None, "speaking": False, "last_fed": 0.0}
         self.stt: TranscribeStreamer | None = None
         self.presented = False
+        self.presenting = False
+        self._barge = False
         self.done = False
         self._tasks: list[asyncio.Task] = []
 
@@ -132,11 +134,12 @@ class DemoSession:
             return
         self.presented = True
         print(f"[demo {self.chat_id}] prospect {user_id} joined -> greet + present", flush=True)
-        await self.speak("Hi! Thanks for joining. I'm the DialogBrain agent — "
-                         "let me give you a quick walkthrough, then I'll answer anything.")
+        await self.speak("Hi! Thanks for joining. I'm the DialogBrain agent — let me give "
+                         "you a quick walkthrough, and feel free to jump in any time.")
         await self.present()
-        await self.speak("That's the overview. Ask me anything — pricing, how it works, "
-                         "or say you're ready and I'll send a secure payment link.")
+        if not self._barge:
+            await self.speak("That's the overview. Ask me anything — pricing, how it works, "
+                             "or say you're ready and I'll send a secure payment link.")
 
     def on_frames(self, frames):
         if self.stt is None:
@@ -189,17 +192,37 @@ class DemoSession:
         if not os.path.exists(DECK_PATH):
             print(f"[demo {self.chat_id}] deck missing at {DECK_PATH}", flush=True)
             return
-        print(f"[demo {self.chat_id}] streaming deck", flush=True)
         dur = await asyncio.to_thread(_probe_dur, DECK_PATH)
-        self.st["speaking"] = True
+        # If we know our own ssrc we can filter our deck audio and KEEP LISTENING
+        # during the deck -> the prospect can barge in any time. If we don't, stay
+        # deaf (so we don't transcribe our own narration) but cap the deaf window.
+        listen = self.st.get("self_ssrc") is not None
+        cap = dur + 0.5 if listen else min(dur, 40.0)
+        print(f"[demo {self.chat_id}] streaming deck (barge-in={'on' if listen else 'off'}, "
+              f"cap={cap:.0f}s)", flush=True)
+        self.presenting = True
+        self._barge = False
+        self.st["speaking"] = not listen
         try:
             await self.call.play(self.chat_id, MediaStream(DECK_PATH),
                                  config=GroupCallConfig(auto_start=True))
-            await asyncio.sleep(dur + 0.5)
+            elapsed = 0.0
+            while elapsed < cap and not self._barge and not self.done:
+                await asyncio.sleep(0.3)
+                elapsed += 0.3
         except Exception as e:
             print(f"[demo {self.chat_id}] present error: {e}", flush=True)
         finally:
             self.st["speaking"] = False
+            self.presenting = False
+            if self._barge:
+                # Cut the deck so the answer can play immediately.
+                print(f"[demo {self.chat_id}] barge-in -> stopping deck", flush=True)
+                try:
+                    await self.call.play(self.chat_id, MediaStream(SILENCE_MEDIA),
+                                         config=GroupCallConfig(auto_start=True))
+                except Exception:
+                    pass
 
     async def send_payment_link(self):
         """Create a Stripe checkout link and post it into the group chat."""
@@ -213,7 +236,11 @@ class DemoSession:
         amount = f"${DEAL_AMOUNT_CENTS/100:.0f}"
         msg = (f"Here's your secure checkout (Stripe, test mode) for {amount}:\n{co.url}\n\n"
                "Test card: 4242 4242 4242 4242, any future date, any CVC.")
-        await self.client.send_message(self.chat_id, msg)
+        try:
+            await self.client.send_message(self.chat_id, msg)
+            print(f"[demo {self.chat_id}] stripe link sent: {co.url}", flush=True)
+        except Exception as e:
+            print(f"[demo {self.chat_id}] link send FAILED: {e}", flush=True)
         try:
             await asyncio.to_thread(self.session.store.set, self.session.call_id,
                                     status="closing", checkout_url=co.url, payment_status="unpaid")
@@ -235,7 +262,16 @@ class DemoSession:
         if norm in _FILLERS or len(norm) < 3:
             return
 
+        # Barge-in: the prospect spoke during the deck -> cut it and answer now.
+        if self.presenting:
+            self._barge = True
+            for _ in range(20):
+                if not self.presenting:
+                    break
+                await asyncio.sleep(0.1)
+
         if any(k in low for k in _BUY_SIGNALS):
+            print(f"[demo {self.chat_id}] BUY signal -> stripe", flush=True)
             await self.send_payment_link()
             return
 
@@ -354,8 +390,13 @@ class DemoHost:
                 return
             action = getattr(u.action, "name", "")
             uid = u.participant.user_id
-            if uid == self.me.id and action == "JOINED":
-                s.on_self_join(u.participant.source)
+            src = getattr(u.participant, "source", None)
+            if uid == self.me.id:
+                # Capture our own ssrc on ANY self update (the JOINED-only check
+                # missed it when we start the call via auto_start) — needed to
+                # filter our deck audio so we can listen/barge during the deck.
+                if src and s.st.get("self_ssrc") != src:
+                    s.on_self_join(src)
             elif action == "JOINED":
                 asyncio.create_task(s.on_participant_join(uid))
 
