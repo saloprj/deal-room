@@ -194,8 +194,12 @@ async def lk_main():
                                           can_publish=True, can_subscribe=True))
              .to_jwt())
     await room.connect(LK_URL, token)
-    await room.local_participant.publish_track(track, rtc.TrackPublishOptions())
-    print(f"[lk] joined room {ROOM}", flush=True)
+    # MUST publish as SOURCE_MICROPHONE: the agent's RoomIO only consumes the
+    # linked participant's microphone-source track — a default (UNKNOWN) source
+    # is ignored, the agent's STT starves, and Transcribe dies at 15s.
+    await room.local_participant.publish_track(
+        track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
+    print(f"[lk] joined room {ROOM} (mic-source track published)", flush=True)
 
     loop = asyncio.get_event_loop()
     nt = loop.time()
