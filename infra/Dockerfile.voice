@@ -9,7 +9,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 RUN pip install --no-cache-dir \
-    py-tgcalls==2.2.11 boto3 exa-py stripe amazon-transcribe numpy "telethon==1.37.0"
+    py-tgcalls==2.2.11 boto3 exa-py stripe amazon-transcribe numpy "telethon==1.37.0" \
+    playwright Pillow
+# Chromium (chrome-headless-shell) for the live browser screen-share presenter.
+RUN playwright install --with-deps chromium
 
 # Overlay the compiled fork over the pypi ntgcalls pulled in by py-tgcalls.
 COPY ntgcalls_fork.so /usr/local/lib/python3.11/site-packages/ntgcalls.cpython-311-x86_64-linux-gnu.so

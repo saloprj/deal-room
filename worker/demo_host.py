@@ -31,18 +31,27 @@ from telethon import TelegramClient, events, utils
 from telethon.sessions import StringSession
 from telethon.tl.functions.messages import CreateChatRequest
 
+import json
+
 import voice
 from bedrock_client import BedrockLLM
 from session import DealRoomSession, PRODUCT_CONTEXT
 from stt import TranscribeStreamer
 from agents.closer import Closer
+from present_browser import LivePresenter
 
 DECK_PATH = os.environ.get("DECK_MEDIA", "/media/deck.mp4")
+DECK_HTML = os.environ.get("DECK_HTML", "/media/deck.html")
+DECK_JSON = os.environ.get("DECK_JSON", "/media/deck.json")
 SILENCE_MEDIA = os.environ.get("SILENCE_MEDIA", "/media/silence.mp3")
+# "live" = browser screen-share + agent-driven slide walk; "video" = baked deck.mp4.
+PRESENTER_MODE = os.environ.get("PRESENTER_MODE", "live")
 PLANG = os.environ.get("DEAL_PROSPECT_LANG", "en")
 STT_LOCALE = {"ru": "ru-RU", "en": "en-US", "es": "es-ES",
               "fr": "fr-FR", "de": "de-DE"}.get(PLANG, "en-US")
 SILENCE16K = b"\x00" * 320  # 10ms @ 16k — Transcribe keepalive
+FRAME_BYTES_OUT = 960       # 10ms @ 48k mono s16le — external mic send_frame
+SILENCE960 = b"\x00" * FRAME_BYTES_OUT
 FAST_MODEL = os.environ.get("BEDROCK_FAST_MODEL", "us.amazon.nova-pro-v1:0")
 
 DEAL_AMOUNT_CENTS = int(os.environ.get("DEAL_AMOUNT_CENTS", "5000"))
@@ -56,6 +65,11 @@ _BUY_SIGNALS = ("buy", "sign up", "sign me up", "let's do it", "lets do it",
 _PRESENT_SIGNALS = ("presentation", "present the deck", "show me the deck",
                     "show the deck", "show slides", "show me slides", "the slides",
                     "walk me through the deck", "show me a demo", "see the deck")
+# Voice slide-navigation intents (only meaningful once a live deck is up).
+_NAV_NEXT = ("next", "next slide", "go on", "continue", "move on", "keep going",
+             "skip ahead", "go forward")
+_NAV_BACK = ("back", "go back", "previous", "previous slide", "last slide",
+             "the slide before", "one back")
 
 # DM sales brain: chat-mode persuasion that can trigger the live demo. It emits a
 # 'DEMO_START' marker on its own line the moment the prospect agrees to a call.
@@ -122,6 +136,12 @@ class DemoSession:
         self._barge = False
         self.done = False
         self._tasks: list[asyncio.Task] = []
+        # Live screen-share presenter (browser) + external-audio plumbing.
+        self.presenter: LivePresenter | None = None
+        self.external_audio = False
+        self.out_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=1500)
+        self._audio_pump_task: asyncio.Task | None = None
+        self._narr: list[str] = []
 
     # ---- pytgcalls events (routed here by the host) ----
     def on_self_join(self, ssrc):
@@ -156,10 +176,19 @@ class DemoSession:
 
     # ---- audio out ----
     async def speak(self, text: str):
-        from pytgcalls.types import GroupCallConfig, MediaStream
+        if not text:
+            return
         say = text
         if PLANG != "en":
             say = await asyncio.to_thread(voice.translate, text, source="en", target=PLANG)
+        if self.external_audio:
+            await self._speak_external(say)
+        else:
+            await self._speak_file(say)
+
+    async def _speak_file(self, say: str):
+        """Smooth path (pre-presentation): Polly MP3 -> ntgcalls paces play(file)."""
+        from pytgcalls.types import GroupCallConfig, MediaStream
         mp3 = await asyncio.to_thread(voice.synthesize_mp3, say, PLANG)
         path = f"/tmp/say_{self.chat_id}_{int(time.time()*1000)}.mp3"
         with open(path, "wb") as f:
@@ -187,7 +216,143 @@ class DemoSession:
             except OSError:
                 pass
 
+    async def _speak_external(self, say: str):
+        """Presentation path: Polly PCM -> external mic queue (screen-share stays up).
+
+        Listen-through-narration when we know our own ssrc (barge-in); otherwise gate
+        STT deaf while we talk so we don't transcribe our own voice."""
+        pcm = await asyncio.to_thread(voice.synthesize_pcm48k, say, PLANG)
+        deaf = self.st.get("self_ssrc") is None
+        self.st["speaking"] = deaf
+        try:
+            for i in range(0, len(pcm), FRAME_BYTES_OUT):
+                if self.done or self._barge:
+                    break
+                ch = pcm[i:i + FRAME_BYTES_OUT]
+                if len(ch) < FRAME_BYTES_OUT:
+                    ch = ch + b"\x00" * (FRAME_BYTES_OUT - len(ch))
+                await self.out_q.put(ch)            # bounded queue -> backpressure paces us
+            # Drain (pump empties at 10ms/frame) unless interrupted.
+            while not self.out_q.empty() and not self.done and not self._barge:
+                await asyncio.sleep(0.05)
+        finally:
+            self.st["speaking"] = False
+            if self._barge:
+                self._flush_audio()
+
+    def _flush_audio(self):
+        try:
+            while True:
+                self.out_q.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+
+    async def _audio_pump(self):
+        """Continuous 10ms external mic send (narration frames or silence keepalive)."""
+        from pytgcalls.types import Device, Frame
+        info = Frame.Info()
+        loop = asyncio.get_running_loop()
+        nt = loop.time()
+        while not self.done:
+            try:
+                ch = self.out_q.get_nowait()
+            except asyncio.QueueEmpty:
+                ch = SILENCE960
+            try:
+                await self.call.send_frame(self.chat_id, Device.MICROPHONE, ch, info)
+            except Exception:
+                pass
+            nt += 0.01
+            d = nt - loop.time()
+            await asyncio.sleep(d if d > 0 else 0)
+
+    # ---- presentation ----
+    def _load_narration(self, total: int) -> list[str]:
+        """Per-slide narration: reveal slide 0 = title intro, 1..N = deck.json slides."""
+        try:
+            deck = json.load(open(DECK_JSON))
+        except Exception as e:
+            print(f"[demo {self.chat_id}] deck.json read err: {e}", flush=True)
+            return ["" for _ in range(total)]
+        intro = f"{deck.get('title', '')}. {deck.get('subtitle', '')}".strip(". ")
+        narr = [intro or "Let me walk you through this."]
+        for s in deck.get("slides", []):
+            narr.append(s.get("narration") or s.get("heading", ""))
+        while len(narr) < total:
+            narr.append("")
+        return narr[:total]
+
+    def _narr_for(self, idx: int) -> str:
+        if 0 <= idx < len(self._narr):
+            return self._narr[idx]
+        return ""
+
+    async def _go_external(self):
+        """Register a Stream(mic=EXTERNAL, screen=EXTERNAL) so screen-share + live
+        narration coexist, and start the continuous external-mic pump."""
+        if self.external_audio:
+            return
+        from pytgcalls.types.raw.stream import Stream
+        from pytgcalls.types.raw.audio_stream import AudioStream
+        from pytgcalls.types.raw.video_stream import VideoStream
+        from pytgcalls.types.raw import AudioParameters, VideoParameters
+        from pytgcalls.types import GroupCallConfig
+        import ntgcalls
+        p = self.presenter
+        stream = Stream(
+            microphone=AudioStream(ntgcalls.MediaSource.EXTERNAL, "", AudioParameters(48000, 1)),
+            screen=VideoStream(ntgcalls.MediaSource.EXTERNAL, "",
+                               VideoParameters(p.w, p.h, p.fps)),
+        )
+        await self.call.play(self.chat_id, stream, GroupCallConfig(auto_start=True))
+        self.external_audio = True
+        self._audio_pump_task = asyncio.create_task(self._audio_pump())
+        await asyncio.sleep(0.3)
+        print(f"[demo {self.chat_id}] external stream registered (mic+screen)", flush=True)
+
+    async def _listen_gap(self, secs: float):
+        t = 0.0
+        while t < secs and not self._barge and not self.done:
+            await asyncio.sleep(0.2)
+            t += 0.2
+
     async def present(self):
+        if PRESENTER_MODE == "live" and os.path.exists(DECK_HTML):
+            try:
+                return await self._present_live()
+            except Exception as e:
+                print(f"[demo {self.chat_id}] live present failed -> deck.mp4: {e}", flush=True)
+        return await self._present_video()
+
+    async def _present_live(self):
+        """Browser screen-share + agent-driven slide walk (narrate -> advance)."""
+        if self.presenter is None:
+            self.presenter = LivePresenter()
+            await self.presenter.launch()
+        await self._go_external()
+        self.presenter.start_video_pump(self.call, self.chat_id)
+        total = await self.presenter.total()
+        if total <= 0:
+            total = 1
+        self._narr = self._load_narration(total)
+        print(f"[demo {self.chat_id}] live walk: {total} slides", flush=True)
+        self.presenting = True
+        self._barge = False
+        try:
+            for i in range(total):
+                if self.done or self._barge:
+                    break
+                await self.presenter.goto(i)
+                await asyncio.sleep(0.5)          # let the slide render before narrating
+                await self.speak(self._narr_for(i))
+                if self.done or self._barge:
+                    break
+                await self._listen_gap(1.0)        # interruption window between slides
+        finally:
+            self.presenting = False
+        # Screen-share stays live for Q&A; the prospect drives nav by voice now.
+
+    async def _present_video(self):
         from pytgcalls.types import GroupCallConfig, MediaStream
         if not os.path.exists(DECK_PATH):
             print(f"[demo {self.chat_id}] deck missing at {DECK_PATH}", flush=True)
@@ -262,9 +427,10 @@ class DemoSession:
         if norm in _FILLERS or len(norm) < 3:
             return
 
-        # Barge-in: the prospect spoke during the deck -> cut it and answer now.
+        # Barge-in: the prospect spoke during the walk -> stop it and handle them now.
         if self.presenting:
             self._barge = True
+            self._flush_audio()
             for _ in range(20):
                 if not self.presenting:
                     break
@@ -275,10 +441,24 @@ class DemoSession:
             await self.send_payment_link()
             return
 
-        if any(k in low for k in _PRESENT_SIGNALS) and os.path.exists(DECK_PATH):
+        # Voice slide navigation (only once a live screen-share deck is up).
+        if self.presenter is not None and not self.done:
+            if any(k in low for k in _NAV_BACK):
+                await self.presenter.prev()
+                idx = await self.presenter.index()
+                print(f"[demo {self.chat_id}] nav back -> slide {idx}", flush=True)
+                await self.speak(self._narr_for(idx))
+                return
+            if any(k in low for k in _NAV_NEXT):
+                await self.presenter.next()
+                idx = await self.presenter.index()
+                print(f"[demo {self.chat_id}] nav next -> slide {idx}", flush=True)
+                await self.speak(self._narr_for(idx))
+                return
+
+        if any(k in low for k in _PRESENT_SIGNALS) and (os.path.exists(DECK_HTML) or os.path.exists(DECK_PATH)):
             await self.speak("Sure — let me walk you through the deck.")
             await self.present()
-            await self.speak("That's the overview — happy to answer any questions.")
             return
 
         try:
@@ -361,6 +541,13 @@ class DemoSession:
         self.done = True
         for t in self._tasks:
             t.cancel()
+        if self._audio_pump_task:
+            self._audio_pump_task.cancel()
+        if self.presenter:
+            try:
+                await self.presenter.stop()
+            except Exception:
+                pass
         try:
             await asyncio.wait_for(self.call.leave_call(self.chat_id), timeout=3.0)
         except Exception:
