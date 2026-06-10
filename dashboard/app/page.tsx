@@ -22,6 +22,9 @@ export default function Home() {
   const [dispatching, setDispatching] = useState<string | null>(null);
   const [ask, setAsk] = useState("");
   const [asking, setAsking] = useState(false);
+  const [tgUser, setTgUser] = useState("");
+  const [regBusy, setRegBusy] = useState(false);
+  const [regMsg, setRegMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const refresh = useCallback(async () => {
     const r = await fetch("/api/state", { cache: "no-store" });
@@ -38,6 +41,16 @@ export default function Home() {
     setDispatching(c.chat_id);
     await fetch("/api/dispatch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: c.chat_id, title: c.title }) });
     await refresh(); setDispatching(null);
+  };
+
+  const register = async () => {
+    const u = tgUser.trim().replace(/^@/, "");
+    if (!u) return;
+    setRegBusy(true); setRegMsg(null);
+    const r = await fetch("/api/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: u }) });
+    setRegBusy(false);
+    if (r.ok) { setRegMsg({ ok: true, text: `You're on the list, @${u}. Now DM @dialogbrain on Telegram and it'll respond.` }); setTgUser(""); }
+    else { const j = await r.json().catch(() => ({})); setRegMsg({ ok: false, text: j.error || "Couldn't register — check the username (4–32 chars, letters/numbers/_)." }); }
   };
 
   const sendAsk = async () => {
@@ -76,13 +89,21 @@ export default function Home() {
 
       <div className="judges">
         <div className="eyebrow"><span className="bulb" />For judges · test it live in 60 seconds</div>
-        <h2>Message <a href="https://t.me/dialogbrain" target="_blank" rel="noreferrer">@dialogbrain</a> on Telegram — the agent runs the whole call itself.</h2>
+        <h2>Enter your Telegram username to unlock the demo — then message <a href="https://t.me/dialogbrain" target="_blank" rel="noreferrer">@dialogbrain</a>.</h2>
+        <div className="reg">
+          <span className="at">@</span>
+          <input value={tgUser} onChange={(e) => setTgUser(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && register()}
+            placeholder="your_telegram_username" spellCheck={false} autoCapitalize="none" />
+          <button onClick={register} disabled={regBusy || !tgUser.trim()}>{regBusy ? "Adding…" : "Unlock demo"}</button>
+        </div>
+        {regMsg && <div className={`regmsg ${regMsg.ok ? "ok" : "err"}`}>{regMsg.text}</div>}
         <ol className="steps">
-          <li><b>DM <a href="https://t.me/dialogbrain" target="_blank" rel="noreferrer">@dialogbrain</a></b> — say hi and ask what it does. It replies and offers a live demo.</li>
-          <li><b>Say “yes, show me a demo.”</b> The agent spins up a Telegram group and starts a voice call.</li>
+          <li><b>Register your Telegram username above</b> (the agent only replies to people who opt in here).</li>
+          <li><b>DM <a href="https://t.me/dialogbrain" target="_blank" rel="noreferrer">@dialogbrain</a></b> — say hi, then “yes, show me a demo.” It spins up a group and starts a voice call.</li>
           <li><b>Tap “Join”</b> on the voice chat. It <b>shares its screen</b>, presents the deck, and narrates + advances the slides itself.</li>
           <li><b>Talk between slides</b> — say “next”, “go back”, or ask anything (“what’s the AI agent market size?”). It answers by voice with live Exa research.</li>
-          <li><b>Say “I’m ready to pay.”</b> It posts a <b>Stripe</b> checkout link in the chat — test card <span className="mono">4242 4242 4242 4242</span>, any future date / CVC.</li>
+          <li><b>Say “I’m ready to pay.”</b> It posts a <b>Stripe</b> checkout link — test card <span className="mono">4242 4242 4242 4242</span>, any future date / CVC.</li>
         </ol>
         <div className="judges-foot">Runs 100% on AWS (Telegram voice · Amazon Transcribe → Bedrock → Polly · Exa · Stripe). No app install — just Telegram.</div>
       </div>

@@ -64,6 +64,20 @@ export async function getCall(id: string): Promise<Call | null> {
   return (out.Item as Call) || null;
 }
 
+// Opt-in allowlist: people who registered their Telegram username on the site.
+// Stored as a DynamoDB String Set on the LEADS#index item; the worker reads it
+// and only engages DMs from these usernames. ADD is atomic + dedups.
+export async function registerLead(username: string): Promise<string> {
+  const u = username.replace(/^@/, "").trim().toLowerCase();
+  if (!/^[a-z0-9_]{4,32}$/.test(u)) throw new Error("invalid telegram username");
+  await ddb.send(new UpdateCommand({
+    TableName: TABLE, Key: { call_id: "LEADS#index" },
+    UpdateExpression: "ADD usernames :u SET updated_at = :t",
+    ExpressionAttributeValues: { ":u": new Set([u]), ":t": Math.floor(Date.now() / 1000) },
+  }));
+  return u;
+}
+
 export async function createCall(id: string) {
   const item: Call = {
     call_id: id, status: "starting", transcript: [], command: "start",

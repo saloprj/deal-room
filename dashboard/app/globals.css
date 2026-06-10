@@ -56,6 +56,15 @@ h1 .em { color: var(--cyan); }
   font-family: var(--mono); font-size: 11px; display: grid; place-items: center; }
 .judges .steps b { color: var(--fg); }
 .judges .mono { font-family: var(--mono); color: var(--cyan); }
+.judges .reg { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
+.judges .reg .at { font-family: var(--mono); color: var(--cyan); font-size: 15px; }
+.judges .reg input { flex: 1; font: 500 14px var(--mono); background: var(--panel-2); border: 1px solid rgba(76,194,255,.35);
+  border-radius: 11px; padding: 11px 13px; color: var(--fg); outline: none; }
+.judges .reg input:focus { border-color: var(--cyan); }
+.judges .reg button { background: var(--cyan); color: #051018; border-color: transparent; font-weight: 700; white-space: nowrap; }
+.judges .regmsg { font-family: var(--mono); font-size: 12px; margin: 4px 0 12px; }
+.judges .regmsg.ok { color: var(--green); }
+.judges .regmsg.err { color: var(--red); }
 .judges-foot { margin-top: 14px; font-family: var(--mono); font-size: 11.5px; color: var(--mute); letter-spacing: .02em; }
 
 .live { display: inline-flex; align-items: center; gap: 9px; font-family: var(--mono); font-size: 12px; letter-spacing: .18em; text-transform: uppercase;
