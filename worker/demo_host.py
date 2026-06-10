@@ -497,12 +497,25 @@ class DemoSession:
             if reply.strip().upper().startswith("RESEARCH:") and len(norm) > 12:
                 q = reply.split(":", 1)[1].strip()
                 print(f"[demo {self.chat_id}] exa: {q!r}", flush=True)
-                snippets = await asyncio.to_thread(_exa_search, q)
-                reply = await asyncio.to_thread(
-                    self.fast_llm.complete,
-                    f'Prospect asked: "{en}". Fresh web research:\n{snippets}\n'
-                    f'Answer in 2 short spoken sentences using these facts.',
-                    system=PRODUCT_CONTEXT, max_tokens=120)
+                # Filler so there's no dead air while Exa runs (it can be slow).
+                await self.speak("Good question — let me check the latest numbers.")
+                try:
+                    # Hard timeout: Exa has no timeout of its own and was hanging the
+                    # whole call (agent went silent). 8s, else answer from what we know.
+                    snippets = await asyncio.wait_for(
+                        asyncio.to_thread(_exa_search, q), timeout=8.0)
+                    reply = await asyncio.to_thread(
+                        self.fast_llm.complete,
+                        f'Prospect asked: "{en}". Fresh web research:\n{snippets}\n'
+                        f'Answer in 2 short spoken sentences using these facts.',
+                        system=PRODUCT_CONTEXT, max_tokens=120)
+                except Exception as re:
+                    print(f"[demo {self.chat_id}] research timeout/err: {re}", flush=True)
+                    reply = await asyncio.to_thread(
+                        self.fast_llm.complete,
+                        f'Prospect asked: "{en}". Give your best 2-sentence spoken answer '
+                        f'from what you already know — no filler.',
+                        system=PRODUCT_CONTEXT, max_tokens=110)
             asyncio.create_task(asyncio.to_thread(
                 self.session.store.append_transcript, self.session.call_id, "prospect", en))
             asyncio.create_task(asyncio.to_thread(
