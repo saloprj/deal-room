@@ -160,6 +160,9 @@ class DemoSession:
             return
         self.presented = True
         print(f"[demo {self.chat_id}] prospect {user_id} joined -> greet + present", flush=True)
+        await self._run_presentation()
+
+    async def _run_presentation(self):
         await self.speak("Hi! Thanks for joining. I'm the DialogBrain agent — let me give "
                          "you a quick walkthrough, and feel free to jump in any time.")
         await self.present()
@@ -434,6 +437,14 @@ class DemoSession:
         low = en.lower()
         norm = low.strip().strip(".,!?… ")
         if norm in _FILLERS or len(norm) < 3:
+            return
+
+        # Robust trigger: if the JOINED event was missed (the call flapped) but we can
+        # clearly hear the prospect, kick off greet + presentation now.
+        if not self.presented and not self.done:
+            self.presented = True
+            print(f"[demo {self.chat_id}] heard prospect -> greet + present", flush=True)
+            asyncio.create_task(self._run_presentation())
             return
 
         # Barge-in: the prospect spoke during the walk -> stop it and handle them now.

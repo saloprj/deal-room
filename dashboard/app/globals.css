@@ -41,6 +41,23 @@ h1 { font-family: var(--display); font-weight: 800; font-size: 38px; letter-spac
 h1 .em { color: var(--cyan); }
 .tagline { font-family: var(--mono); color: var(--mute); font-size: 12.5px; margin: 10px 0 26px; letter-spacing: .02em; animation: rise .6s .05s ease both; }
 
+.judges { position: relative; overflow: hidden; border-radius: 18px; padding: 22px 24px; margin-bottom: 22px;
+  background: linear-gradient(180deg, rgba(76,194,255,.12), rgba(76,194,255,.03));
+  border: 1px solid rgba(76,194,255,.45); box-shadow: 0 0 60px rgba(76,194,255,.1);
+  animation: rise .6s .1s ease both; }
+.judges .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .3em; text-transform: uppercase; color: var(--cyan); display: flex; align-items: center; gap: 8px; }
+.judges .eyebrow .bulb { width: 8px; height: 8px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 12px var(--cyan); animation: pulse 1.4s infinite; }
+.judges h2 { font-family: var(--display); font-weight: 800; font-size: 1.35em; letter-spacing: -.01em; margin: 10px 0 14px; line-height: 1.2; }
+.judges h2 a, .judges .steps a { color: var(--cyan); text-decoration: none; border-bottom: 1px dashed rgba(76,194,255,.5); }
+.judges .steps { list-style: none; counter-reset: s; display: grid; gap: 9px; }
+.judges .steps li { counter-increment: s; position: relative; padding-left: 32px; color: #cdd4e2; font-size: 14px; line-height: 1.45; }
+.judges .steps li::before { content: counter(s); position: absolute; left: 0; top: -1px; width: 22px; height: 22px; border-radius: 50%;
+  background: rgba(76,194,255,.14); border: 1px solid rgba(76,194,255,.4); color: var(--cyan);
+  font-family: var(--mono); font-size: 11px; display: grid; place-items: center; }
+.judges .steps b { color: var(--fg); }
+.judges .mono { font-family: var(--mono); color: var(--cyan); }
+.judges-foot { margin-top: 14px; font-family: var(--mono); font-size: 11.5px; color: var(--mute); letter-spacing: .02em; }
+
 .live { display: inline-flex; align-items: center; gap: 9px; font-family: var(--mono); font-size: 12px; letter-spacing: .18em; text-transform: uppercase;
   padding: 8px 14px; border: 1px solid var(--line); border-radius: 999px; color: var(--mute); background: var(--panel); white-space: nowrap; }
 .live.on { color: var(--amber); border-color: rgba(245,182,44,.4); box-shadow: 0 0 24px rgba(245,182,44,.12) inset; }
