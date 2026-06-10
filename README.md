@@ -5,7 +5,7 @@
 > SuperAI NEXT Hackathon 2026 · Track: Retail Experience Assistants
 > Built on **AWS · Vercel · Exa · Stripe**
 
-🔗 **Live demo:** https://dashboard-chi-sepia-54.vercel.app  ·  🎥 **Demo video:** _(link)_
+🔗 **Live demo:** https://dashboard-chi-sepia-54.vercel.app  ·  🎥 **Demo video:** [watch (82s, narrated)](https://github.com/saloprj/deal-room/raw/main/deck/demo.mp4)
 
 ---
 
