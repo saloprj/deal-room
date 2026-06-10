@@ -9,6 +9,21 @@
 
 ---
 
+## 🧪 Test it live (judges)
+
+The whole flow is self-serve on Telegram — no account setup needed beyond your own Telegram app:
+
+1. **Message [@dialogbrain](https://t.me/dialogbrain)** on Telegram — say you're interested and ask what it does.
+2. The agent replies and **offers a live demo call**. Say **"yes"** (or "let's do it").
+3. It **creates a group with you and starts a voice call.** Open the call (tap the voice-chat bar at the top of the new group).
+4. As soon as you're in, the agent **greets you and presents a short deck** (video + narration), then listens.
+5. **Ask it anything by voice** — pricing, how it works, or a research question like *"what's the AI agent market size?"* (it pulls live web facts via Exa).
+6. Say **"I'm ready to pay"** → it posts a **Stripe checkout link** in the group chat. It's test mode — pay with card **4242 4242 4242 4242**, any future expiry, any CVC.
+
+Everything above runs on AWS (Telegram voice via pytgcalls, Amazon Transcribe → Bedrock → Polly, Exa research, Stripe close) — one EC2 box, zero external orchestration.
+
+---
+
 ## What it does
 
 A prospect just sends a message. From there the agent runs the whole deal **on its own**:
