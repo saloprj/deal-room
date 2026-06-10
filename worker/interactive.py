@@ -48,6 +48,8 @@ _PRESENT_SIGNALS = ("presentation", "present the deck", "show me the deck",
                     "show the deck", "show slides", "show me slides", "the slides",
                     "walk me through the deck", "show me a demo")
 DECK_PATH = os.environ.get("DECK_MEDIA", "/media/deck.mp4")
+# Pure hesitation noises — never answer these (the "agent keeps talking" bug).
+_FILLERS = {"oh", "uh", "um", "hmm", "mhm", "huh", "ah", "er", "uh-huh", "mm"}
 
 # Fast voice model (benchmarked on the box: Nova Pro 0.43s vs Sonnet 2.38s).
 # The single fast call also ROUTES: it may answer directly or request Exa
@@ -201,6 +203,11 @@ async def main():
             en = await asyncio.to_thread(voice.translate, text, source=PLANG, target="en")
 
         low = en.lower()
+        norm = low.strip().strip(".,!?… ")
+        if norm in _FILLERS or len(norm) < 3:
+            print(f"[skip] filler: {en!r}", flush=True)
+            return  # don't answer hesitation noises — that's the rambling bug
+
         if any(k in low for k in _PRESENT_SIGNALS) and os.path.exists(DECK_PATH):
             # Presentation: stream the rendered deck (video+narration) into the call.
             print("[present] streaming deck into the call", flush=True)
@@ -232,7 +239,7 @@ async def main():
                     f'Prospect said: "{en}". Answer their actual question directly first; '
                     f'no filler, no pivoting to a pitch unless they asked about the product.',
                     system=_FAST_SYS, max_tokens=110)
-                if reply.strip().upper().startswith("RESEARCH:"):
+                if reply.strip().upper().startswith("RESEARCH:") and len(norm) > 12:
                     q = reply.split(":", 1)[1].strip()
                     print(f"[research] exa: {q!r}", flush=True)
                     snippets = await asyncio.to_thread(_exa_search, q)
