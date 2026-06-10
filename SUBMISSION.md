@@ -17,9 +17,17 @@ Everything needed to submit at **forms.superai.com/next-submissions** (due **Jun
 | **Team Member 2** | Denis Somkin — `___@___` *(need email)* |
 | **GitHub Repository** | `https://github.com/saloprj/deal-room` |
 | **Live Demo URL** | `https://dashboard-chi-sepia-54.vercel.app` |
-| **Project Thumbnail** | a deck title slide (PNG) |
+| **Project Thumbnail** | `deck/thumbnail.png` (1200×630, in repo) |
 
-### Project Description (paste this)
+> **Status:** the SuperAI form is already **pre-filled in the browser** (all fields above). Only two things remain before hitting **Submit**: Denis Somkin's email (Team Member 2) and uploading `deck/thumbnail.png`.
+
+### Project Description — the form caps this at **250 characters**. Use this exact short version:
+
+> Autonomous AI agent that runs a live multilingual sales call end-to-end: presents a deck, answers with live Exa research, and closes via Stripe behind a human-approval gate. AWS Bedrock brain · Polly/Transcribe voice · Vercel Control Room.
+
+*(Longer version below for the DoraHacks BUIDL / README, which have no limit.)*
+
+<details><summary>Long description (no char limit — for DoraHacks/README)</summary>
 
 > Deal-Room is an autonomous AI sales agent that runs a live, multilingual sales call end-to-end — it presents, answers, researches, and closes, with a human holding the keys.
 >
@@ -28,6 +36,8 @@ Everything needed to submit at **forms.superai.com/next-submissions** (due **Jun
 > Everything runs on AWS: Amazon Bedrock (Claude) is the reasoning brain that orchestrates each turn (present / answer / research / close); Amazon Transcribe + Polly + Translate power real-time multilingual speech; Exa does live in-call web research; Stripe handles the close; DynamoDB is the operator control bus. A Vercel "Control Room" lets a human watch the live transcript, steer the agent, and approve or reject every close in real time — the human-in-the-loop safety gate on each deal.
 >
 > Built on AWS · Vercel · Exa · Stripe.
+
+</details>
 
 ---
 
@@ -59,7 +69,21 @@ Everything needed to submit at **forms.superai.com/next-submissions** (due **Jun
 
 ---
 
-## 4. Pre-submit checklist
+## 4. DoraHacks BUIDL (draft — in case it's also required)
+
+- **Name:** Deal-Room
+- **Tagline:** Autonomous AI agent that runs a live multilingual sales call — presents, answers, researches, and closes. You hold the keys.
+- **Hackathon:** SuperAI NEXT 2026 · Track: Retail Experience Assistants
+- **Tech stack:** AWS (Bedrock, Transcribe, Polly, Translate, DynamoDB, EC2) · Exa · Stripe · Vercel · Telegram (pytgcalls)
+- **GitHub:** https://github.com/saloprj/deal-room
+- **Live demo:** https://dashboard-chi-sepia-54.vercel.app
+- **Demo video:** _(link)_
+- **Description:** use the long description above.
+- **Cover image:** `deck/thumbnail.png`
+
+---
+
+## 5. Pre-submit checklist
 - [ ] Repo public, README has demo-video link
 - [ ] Live Demo URL works in-browser without Telegram (self-contained, durable creds)
 - [ ] Demo video recorded + hosted (YouTube/Loom) + linked in README
