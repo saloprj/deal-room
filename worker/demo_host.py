@@ -297,7 +297,7 @@ class DemoSession:
         if not opened:
             print(f"[demo {self.chat_id}] could not open call", flush=True)
             self.done = True
-            return
+            return False
         for attempt in range(10):
             try:
                 await self.call.record(self.chat_id, RecordStream(
@@ -319,6 +319,7 @@ class DemoSession:
         self._tasks = [asyncio.create_task(_stt_runner()),
                        asyncio.create_task(self._stt_keepalive())]
         print(f"[demo {self.chat_id}] LIVE — listening", flush=True)
+        return True
 
     async def teardown(self):
         self.done = True
@@ -413,12 +414,20 @@ class DemoHost:
                 await self.client.send_message(
                     peer, "Couldn't open a demo group just now — mind trying again?")
                 return
-            await self.client.send_message(
-                chat_id, "Join the voice call here and I'll start presenting as soon as "
-                         "you're in 🎤")
             session = DemoSession(self, chat_id)
             self.active = session
-            await session.run()
+            ok = await session.run()
+            if ok:
+                # Call is live now — point the prospect straight at it.
+                await self.client.send_message(
+                    chat_id, "📞 I've started a voice call in this group — tap **Join** at "
+                             "the top to hop in. I'll walk you through a quick demo, then "
+                             "answer anything. 🎤")
+            else:
+                await self.client.send_message(
+                    chat_id, "I couldn't start the call just now — give me a moment and I'll "
+                             "try again.")
+                self.active = None
 
 
 async def main():
