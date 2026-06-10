@@ -7,6 +7,10 @@
 
 🔗 **Live demo:** https://dashboard-chi-sepia-54.vercel.app  ·  🎥 **Demo video:** [watch (82s, narrated)](https://github.com/saloprj/deal-room/raw/main/deck/demo.mp4)
 
+[![Deal-Room — 80-second demo](deck/thumbnail.png)](https://github.com/saloprj/deal-room/raw/main/deck/demo.mp4)
+
+*▶ Click to watch the 80-second narrated walkthrough (or open the [live demo](https://dashboard-chi-sepia-54.vercel.app) — the video plays right on the page).*
+
 ---
 
 ## 🧪 Test it live (judges)
@@ -80,6 +84,17 @@ One message → presented → answered → closed. Autonomously.
 | **Human-in-the-loop** | Operator **approves/rejects every close** before the Stripe link is sent |
 | **Failure handling** | Call-join retry/recovery, graceful research fallback, the approval safety gate |
 | **Demo** | One-message-to-close live flow + interactive Control Room |
+
+---
+
+## Built on every sponsor
+
+| Sponsor | How Deal-Room uses it |
+|---|---|
+| 🟧 **AWS** | The whole brain + voice stack: **Bedrock** (Claude — reasoning/orchestration), **Transcribe** (live STT), **Polly** (TTS, incl. the narrated demo video), **Translate** (multilingual), **DynamoDB** (operator control bus + opt-in allowlist), **EC2** (the agent runtime). Zero external orchestration. |
+| 💜 **Stripe** | The money action — the agent detects buy-intent on the call and creates a real **Stripe Checkout** link, posted live in the chat, behind a human-approval gate. A polished, agent-triggered close. |
+| 🔎 **Exa** | Live, in-call **web research** — when a prospect asks something time-sensitive (market size, competitors), the agent searches Exa mid-conversation and answers with fresh, cited facts. |
+| ▲ **Vercel** | The **Control Room** — a Next.js dashboard (live transcript, dispatch, *talk to the agent*, **approve/reject** every close) and the self-serve judge demo + opt-in form. |
 
 ---
 

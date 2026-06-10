@@ -87,6 +87,12 @@ export default function Home() {
       </div>
       <div className="tagline">autonomous sales-call agent · present → translate → research(exa) → close(stripe) · you hold the keys</div>
 
+      <div className="hero">
+        <div className="eyebrow"><span className="bulb" />See it in 80 seconds</div>
+        <video src="/demo.mp4" poster="/thumbnail.png" controls playsInline preload="metadata" className="herovid" />
+        <div className="hero-foot">A prospect's message → autonomous call → live screen-share pitch → voice Q&amp;A with Exa research → Stripe close. Rendered on AWS (Polly).</div>
+      </div>
+
       <div className="judges">
         <div className="eyebrow"><span className="bulb" />For judges · test it live in 60 seconds</div>
         <h2>Enter your Telegram username to unlock the demo — then message <a href="https://t.me/dialogbrain" target="_blank" rel="noreferrer">@dialogbrain</a>.</h2>
