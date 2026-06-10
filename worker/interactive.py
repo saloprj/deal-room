@@ -25,14 +25,41 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 import voice
+from bedrock_client import BedrockLLM
 from session import DealRoomSession, PRODUCT_CONTEXT
 from stt import TranscribeStreamer
+
+
+def _exa_search(q: str) -> str:
+    """Live web research via Exa — returns compact snippets for the composer."""
+    from exa_py import Exa
+    res = Exa(os.environ["EXA_API_KEY"]).search_and_contents(
+        q, num_results=3, text={"max_characters": 600}, type="auto")
+    return "\n".join(f"[{i+1}] {r.title}: {(r.text or '')[:500]}"
+                     for i, r in enumerate(res.results or []))
 
 # Explicit buy signals route to the full close flow (Stripe + human approval);
 # everything else takes the fast single-LLM-call answer path.
 _BUY_SIGNALS = ("buy", "sign up", "sign me up", "let's do it", "lets do it",
                 "deposit", "purchase", "take my money", "i'm in", "im in",
                 "subscribe", "send me the link", "how do i pay", "let's close")
+# Presentation trigger -> stream the rendered deck (video+narration) into the call.
+_PRESENT_SIGNALS = ("presentation", "present the deck", "show me the deck",
+                    "show the deck", "show slides", "show me slides", "the slides",
+                    "walk me through the deck", "show me a demo")
+DECK_PATH = os.environ.get("DECK_MEDIA", "/media/deck.mp4")
+
+# Fast voice model (benchmarked on the box: Nova Pro 0.43s vs Sonnet 2.38s).
+# The single fast call also ROUTES: it may answer directly or request Exa
+# research via a "RESEARCH:" marker (restores the research tool in voice).
+FAST_MODEL = os.environ.get("BEDROCK_FAST_MODEL", "us.amazon.nova-pro-v1:0")
+_FAST_SYS = (
+    PRODUCT_CONTEXT
+    + " If (and ONLY if) answering well requires fresh web facts — market sizes, news, "
+      "competitors, anything you may not know — reply with EXACTLY 'RESEARCH: <web search "
+      "query>' and nothing else. Otherwise answer the prospect in 1-2 short, natural "
+      "spoken sentences."
+)
 
 CHAT = int(os.environ["TG_GROUP_ID"])
 PLANG = os.environ.get("DEAL_PROSPECT_LANG", "en")
@@ -73,7 +100,8 @@ async def main():
 
     call = PyTgCalls(client)
     session = DealRoomSession(f"call-incall-{int(time.time())}", require_approval=True)
-    st = {"self_ssrc": None, "speaking": False}
+    fast_llm = BedrockLLM(model_id=FAST_MODEL)
+    st = {"self_ssrc": None, "speaking": False, "last_fed": 0.0}
     stt: TranscribeStreamer | None = None
     play_done = asyncio.Event()
     seq = {"n": 0}
@@ -102,11 +130,24 @@ async def main():
             return
         if st["speaking"]:
             stt.feed(SILENCE16K)  # keepalive; ignore our own voice echo
+            st["last_fed"] = time.time()
             return
         for fr in u.frames:
             if st["self_ssrc"] is not None and fr.ssrc == st["self_ssrc"]:
                 continue
             stt.feed(_ds_48_16(fr.frame))
+            st["last_fed"] = time.time()
+
+    async def _stt_keepalive():
+        # Transcribe kills the stream after 15s with no audio — and the dead
+        # window eats the FIRST words of your next question (the "answers a
+        # minute later" bug). Feed silence whenever the call goes quiet >2s.
+        while True:
+            await asyncio.sleep(0.5)
+            if stt is not None and time.time() - st["last_fed"] > 2.0:
+                for _ in range(50):  # 0.5s of 10ms silence frames
+                    stt.feed(SILENCE16K)
+                st["last_fed"] = time.time()
 
     async def speak(text: str):
         # Translate + synthesize off-loop (blocking boto3); write to a file and
@@ -159,18 +200,47 @@ async def main():
         if PLANG != "en":
             en = await asyncio.to_thread(voice.translate, text, source=PLANG, target="en")
 
+        low = en.lower()
+        if any(k in low for k in _PRESENT_SIGNALS) and os.path.exists(DECK_PATH):
+            # Presentation: stream the rendered deck (video+narration) into the call.
+            print("[present] streaming deck into the call", flush=True)
+            await speak("Sure — let me walk you through the deck.")
+            dur = await asyncio.to_thread(_probe_dur, DECK_PATH)
+            st["speaking"] = True
+            try:
+                await call.play(CHAT, MediaStream(DECK_PATH),
+                                config=GroupCallConfig(auto_start=True))
+                await asyncio.sleep(dur + 0.5)
+            except Exception as e:
+                print(f"[present] play error: {e}", flush=True)
+            finally:
+                st["speaking"] = False
+            await speak("That's the overview — happy to answer any questions.")
+            return
+
         _l = time.time()
         try:
-            if any(k in en.lower() for k in _BUY_SIGNALS):
+            if any(k in low for k in _BUY_SIGNALS):
                 # Full agentic path (orchestrator -> Stripe close + human approval).
                 turn = await asyncio.to_thread(session.handle, en)
                 reply = turn.reply
             else:
-                # FAST path: one Bedrock call, short spoken reply.
+                # FAST path: one Nova Pro call (0.43s vs Sonnet 2.38s) that answers
+                # the actual question first — or routes to Exa research.
                 reply = await asyncio.to_thread(
-                    session.llm.complete,
-                    f'Prospect said: "{en}". Reply in 1-2 short, natural spoken sentences.',
-                    system=PRODUCT_CONTEXT, max_tokens=110)
+                    fast_llm.complete,
+                    f'Prospect said: "{en}". Answer their actual question directly first; '
+                    f'no filler, no pivoting to a pitch unless they asked about the product.',
+                    system=_FAST_SYS, max_tokens=110)
+                if reply.strip().upper().startswith("RESEARCH:"):
+                    q = reply.split(":", 1)[1].strip()
+                    print(f"[research] exa: {q!r}", flush=True)
+                    snippets = await asyncio.to_thread(_exa_search, q)
+                    reply = await asyncio.to_thread(
+                        fast_llm.complete,
+                        f'Prospect asked: "{en}". Fresh web research:\n{snippets}\n'
+                        f'Answer in 2 short spoken sentences using these facts.',
+                        system=PRODUCT_CONTEXT, max_tokens=120)
                 asyncio.create_task(asyncio.to_thread(
                     session.store.append_transcript, session.call_id, "prospect", en))
                 asyncio.create_task(asyncio.to_thread(
@@ -228,6 +298,7 @@ async def main():
                 await asyncio.sleep(0.3)
 
         asyncio.create_task(_stt_runner())
+        asyncio.create_task(_stt_keepalive())
     asyncio.create_task(_dash_poller())
     print(f"DASH_CALL_ID={session.call_id}", flush=True)
     print("INTERACTIVE — listening (ask out loud)", flush=True)
