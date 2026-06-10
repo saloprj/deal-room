@@ -401,7 +401,12 @@ class DemoHost:
                 entity = await self.client.get_entity(peer)
                 result = await self.client(CreateChatRequest(
                     users=[entity], title="DialogBrain Live Demo"))
-                chat = result.chats[0]
+                # Telethon 1.37 wraps the result in InvitedUsers(.updates=Updates).
+                updates = getattr(result, "updates", result)
+                chats = getattr(updates, "chats", None)
+                if not chats:
+                    raise RuntimeError(f"no chat in CreateChat result: {type(result).__name__}")
+                chat = chats[0]
                 chat_id = utils.get_peer_id(chat)
             except Exception as e:
                 print(f"[demo] create group failed: {e}", flush=True)
