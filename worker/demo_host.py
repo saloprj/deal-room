@@ -605,6 +605,27 @@ class DemoHost:
         self.peer_history: dict[int, list[str]] = {}
         self.active: DemoSession | None = None
         self._lock = asyncio.Lock()
+        # Opt-in allowlist: only engage people who registered their Telegram
+        # username on the deal-room site (LEADS#index item in DynamoDB). Cached
+        # ~15s so new registrations take effect quickly without a read per DM.
+        self._allow = {"ts": 0.0, "set": set()}
+
+    def _fetch_leads(self) -> set:
+        import boto3
+        ddb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+        t = ddb.Table(os.environ.get("DDB_TABLE", "dealroom_calls"))
+        item = t.get_item(Key={"call_id": "LEADS#index"}).get("Item") or {}
+        return {str(u).lstrip("@").lower() for u in (item.get("usernames") or [])}
+
+    async def _allowed(self, username: str | None) -> bool:
+        if not username:
+            return False
+        if time.time() - self._allow["ts"] > 15:
+            try:
+                self._allow = {"ts": time.time(), "set": await asyncio.to_thread(self._fetch_leads)}
+            except Exception as e:
+                print(f"[allowlist] fetch err: {e}", flush=True)
+        return username.lstrip("@").lower() in self._allow["set"]
 
     def register(self):
         from pytgcalls import filters as fl
@@ -639,6 +660,12 @@ class DemoHost:
         peer = event.sender_id
         text = (event.raw_text or "").strip()
         if not text:
+            return
+        # Opt-in only: ignore anyone who didn't register their username on the site.
+        sender = await event.get_sender()
+        uname = getattr(sender, "username", None)
+        if not await self._allowed(uname):
+            print(f"[dm] ignored (not registered): @{uname}", flush=True)
             return
         hist = self.peer_history.setdefault(peer, [])
         hist.append(f"Prospect: {text}")
