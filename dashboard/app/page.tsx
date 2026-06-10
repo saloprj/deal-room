@@ -89,8 +89,10 @@ export default function Home() {
 
       <div className="hero">
         <div className="eyebrow"><span className="bulb" />See it in 80 seconds</div>
-        <video src="/demo.mp4" poster="/thumbnail.png" controls playsInline preload="metadata" className="herovid" />
-        <div className="hero-foot">A prospect's message → autonomous call → live screen-share pitch → voice Q&amp;A with Exa research → Stripe close. Rendered on AWS (Polly).</div>
+        <video src="https://github.com/saloprj/deal-room/raw/main/deck/demo.mp4"
+          poster="https://github.com/saloprj/deal-room/raw/main/deck/thumbnail.png"
+          controls playsInline preload="metadata" className="herovid" />
+        <div className="hero-foot">A prospect's message → autonomous call → live screen-share pitch → voice Q&amp;A with Exa research → Stripe close. Rendered on AWS (Polly). <a href="https://github.com/saloprj/deal-room/raw/main/deck/demo.mp4" target="_blank" rel="noreferrer">Can&apos;t see it? Watch here →</a></div>
       </div>
 
       <div className="judges">
