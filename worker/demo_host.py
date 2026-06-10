@@ -614,7 +614,8 @@ class DemoHost:
         import boto3
         ddb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
         t = ddb.Table(os.environ.get("DDB_TABLE", "dealroom_calls"))
-        item = t.get_item(Key={"call_id": "LEADS#index"}).get("Item") or {}
+        # Strongly-consistent so a just-registered judge is never transiently missed.
+        item = t.get_item(Key={"call_id": "LEADS#index"}, ConsistentRead=True).get("Item") or {}
         return {str(u).lstrip("@").lower() for u in (item.get("usernames") or [])}
 
     async def _allowed(self, username: str | None) -> bool:
