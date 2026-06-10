@@ -11,16 +11,16 @@
 
 ## 🧪 Test it live (judges)
 
-The whole flow is self-serve on Telegram — no account setup needed beyond your own Telegram app:
+Self-serve on Telegram — just register your username first (the agent is opt-in, so it only replies to people who ask for the demo):
 
-1. **Message [@dialogbrain](https://t.me/dialogbrain)** on Telegram — say you're interested and ask what it does.
-2. The agent replies and **offers a live demo call**. Say **"yes"** (or "let's do it").
-3. It **creates a group with you and starts a voice call.** Open the call (tap the voice-chat bar at the top of the new group).
-4. As soon as you're in, the agent **greets you and presents a short deck** (video + narration), then listens.
-5. **Ask it anything by voice** — pricing, how it works, or a research question like *"what's the AI agent market size?"* (it pulls live web facts via Exa).
-6. Say **"I'm ready to pay"** → it posts a **Stripe checkout link** in the group chat. It's test mode — pay with card **4242 4242 4242 4242**, any future expiry, any CVC.
+1. **Open the [live demo](https://dashboard-chi-sepia-54.vercel.app)** → enter your **Telegram username** in the "unlock the demo" box → **Unlock demo**.
+2. **Message [@dialogbrain](https://t.me/dialogbrain)** on Telegram — say hi, then **"yes, show me a demo."**
+3. It **creates a group with you and starts a voice call.** Tap the voice-chat bar at the top of the new group to **Join**.
+4. The agent **greets you and shares its screen** — presenting the deck, narrating and **advancing the slides itself**.
+5. **Talk between slides** — say **"next"**, **"go back"**, or ask anything by voice (e.g. *"what's the AI agent market size?"* → live Exa research).
+6. Say **"I'm ready to pay"** → it posts a **Stripe checkout link** in the chat. Test mode — card **4242 4242 4242 4242**, any future expiry, any CVC.
 
-Everything above runs on AWS (Telegram voice via pytgcalls, Amazon Transcribe → Bedrock → Polly, Exa research, Stripe close) — one EC2 box, zero external orchestration.
+Everything above runs on AWS (Telegram voice via pytgcalls + ntgcalls screen-share, Amazon Transcribe → Bedrock → Polly, Exa research, Stripe close) — one EC2 box, zero external orchestration.
 
 ---
 

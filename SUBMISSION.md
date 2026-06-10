@@ -45,6 +45,8 @@ Everything needed to submit at **forms.superai.com/next-submissions** (due **Jun
 
 **Target length: ~2 min.** One continuous thread, one prospect message to a closed deal.
 
+> **Before recording:** the agent is opt-in — register your own Telegram username on the live demo URL (the "unlock the demo" box) first, or it will ignore your DM.
+
 1. **(0:00) Hook** — on screen: a Telegram chat. Type as the prospect: *"Hi, I saw DialogBrain — interested, can you show me?"*
 2. **(0:10) Agent proposes + sets up** — agent replies, then *"give me a sec, opening a room"*; a group is created, you're added, a voice chat starts. (Show the agent doing this autonomously.)
 3. **(0:25) Join the call** — the agent is presenting: deck on screen, narrating, advancing slides.
